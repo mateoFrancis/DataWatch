@@ -4,7 +4,7 @@ Project implementing core concepts of computer networks to a web app for fire al
 ## Github Terminal Guide
 
 ### Cloning the Repository:
-git clone https://github.com/mateoFrancis/AtmoApp
+git clone https://github.com/mateoFrancis/DataWatch
 <br><br>
 
 ### Pushing commands
