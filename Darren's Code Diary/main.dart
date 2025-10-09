@@ -1,14 +1,25 @@
+// main.dart
+import 'dart:async';
+import 'dart:convert';
+import 'dart:math';
+
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   runApp(MyApp());
 }
 
+const String PREFS_OLD_SNAPSHOT = 'oldSnapshot';
+const String PREFS_ERROR_LOG = 'errorLog';
+const String PREFS_DAILY_LOG = 'dailyLog';
+
 class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Data Watch Homepage',
+      title: 'Data Watch',
+      theme: ThemeData.light(),
       home: HomePage(),
     );
   }
@@ -20,40 +31,372 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  final List<Map<String, dynamic>> sources = [
-    {
-      'name': 'Source A',
-      'connection': Icons.check,
-      'report': Icons.warning,
-      'connectionDetails': 'Last checked: 2025-10-06 14:12\nConnection stable.',
-      'reportDetails': 'Last submitted: 2025-10-06 13:45\nWarning: Submission delayed due to queue overflow.',
-    },
-    {
-      'name': 'Source B',
-      'connection': Icons.close,
-      'report': Icons.more_horiz,
-      'connectionDetails': 'Last checked: 2025-10-06 12:30\nError: Node unreachable.',
-      'reportDetails': 'Last submitted: 2025-10-06 11:50\nStale: Awaiting new data.',
-    },
-    {
-      'name': 'Source C',
-      'connection': Icons.check,
-      'report': Icons.check,
-      'connectionDetails': 'Last checked: 2025-10-06 15:05\nConnection healthy.',
-      'reportDetails': 'Last submitted: 2025-10-06 15:00\nReport received successfully.',
-    },
-  ];
+  final Random _rng = Random();
 
-  final Map<String, bool> expandedConnection = {};
-  final Map<String, bool> expandedReport = {};
+  List<Map<String, dynamic>> sources = [];
+  Map<String, dynamic>? oldSnapshot;
+  Timer? _refreshTimer;
+
+  final List<Map<String, String>> _errorLog = [];
+  final List<Map<String, String>> _dailyLog = [];
 
   @override
   void initState() {
     super.initState();
-    for (var source in sources) {
-      expandedConnection[source['name']] = false;
-      expandedReport[source['name']] = false;
+    _initEverything();
+  }
+
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _initEverything() async {
+    await _loadPersistedState();
+    _generateMockData();
+    await _evaluateAndPersistChanges();
+    _startTimer();
+    setState(() {});
+  }
+
+  Future<void> _loadPersistedState() async {
+    final prefs = await SharedPreferences.getInstance();
+    final storedSnap = prefs.getString(PREFS_OLD_SNAPSHOT);
+    if (storedSnap != null) {
+      try {
+        oldSnapshot = jsonDecode(storedSnap) as Map<String, dynamic>;
+      } catch (_) {
+        oldSnapshot = null;
+      }
     }
+
+    final storedErrors = prefs.getString(PREFS_ERROR_LOG);
+    if (storedErrors != null) {
+      try {
+        final list = jsonDecode(storedErrors) as List<dynamic>;
+        _errorLog.clear();
+        for (var e in list) _errorLog.add(Map<String, String>.from(e as Map));
+      } catch (_) {}
+    }
+
+    final storedDaily = prefs.getString(PREFS_DAILY_LOG);
+    if (storedDaily != null) {
+      try {
+        final list = jsonDecode(storedDaily) as List<dynamic>;
+        _dailyLog.clear();
+        for (var e in list) _dailyLog.add(Map<String, String>.from(e as Map));
+      } catch (_) {}
+    }
+  }
+
+  Future<void> _savePersistedLogs() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(PREFS_ERROR_LOG, jsonEncode(_errorLog));
+    await prefs.setString(PREFS_DAILY_LOG, jsonEncode(_dailyLog));
+  }
+
+  Future<void> _saveOldSnapshot(Map<String, dynamic> snapshot) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(PREFS_OLD_SNAPSHOT, jsonEncode(snapshot));
+    oldSnapshot = snapshot;
+  }
+
+  Future<void> _clearPersistedAll() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(PREFS_OLD_SNAPSHOT);
+    await prefs.remove(PREFS_ERROR_LOG);
+    await prefs.remove(PREFS_DAILY_LOG);
+    oldSnapshot = null;
+    _errorLog.clear();
+    _dailyLog.clear();
+    setState(() {});
+  }
+
+  void _startTimer() {
+    _refreshTimer = Timer.periodic(Duration(seconds: 30), (timer) async {
+      await _onRefreshCycle();
+    });
+  }
+
+  Future<void> _onRefreshCycle() async {
+    _generateMockData();
+    await _evaluateAndPersistChanges();
+    setState(() {});
+  }
+
+  Map<String, dynamic> _buildSnapshotFromSources() {
+    final map = <String, dynamic>{};
+    for (var s in sources) {
+      final name = s['name'] as String;
+      map[name] = {
+        'connection': s['connectionKey'],
+        'report': s['reportKey'],
+        'connectionDetails': s['connectionDetails'],
+        'reportDetails': s['reportDetails'],
+      };
+    }
+    return map;
+  }
+
+  Future<void> _evaluateAndPersistChanges() async {
+    final snapshot = _buildSnapshotFromSources();
+    final changed = jsonEncode(snapshot) != jsonEncode(oldSnapshot ?? {});
+    if (changed) {
+      _appendLogsFromSnapshot(snapshot);
+      await _saveOldSnapshot(snapshot);
+      await _savePersistedLogs();
+    }
+  }
+
+  void _appendLogsFromSnapshot(Map<String, dynamic> snapshot) {
+    final now = DateTime.now().toIso8601String();
+
+    snapshot.forEach((name, value) {
+      final entry = value as Map<String, dynamic>;
+      final conn = entry['connection'] as String? ?? 'unknown';
+      final rep = entry['report'] as String? ?? 'unknown';
+      final connDetails = entry['connectionDetails'] as String? ?? '';
+      final repDetails = entry['reportDetails'] as String? ?? '';
+
+      if (conn == 'error' || conn == 'down') {
+        _errorLog.insert(0, {'time': now, 'description': '$name connection: $connDetails', 'status': conn.toUpperCase()});
+      }
+
+      // Report errors only if connection is neither ok nor stale
+      if ((rep == 'error' || rep == 'down')) {
+        if (!(conn == 'ok' || conn == 'stale')) {
+          _errorLog.insert(0, {'time': now, 'description': '$name report: $repDetails', 'status': rep.toUpperCase()});
+        }
+      }
+
+      _dailyLog.insert(0, {'time': now, 'description': '$name update - conn:$conn rep:$rep', 'status': 'INFO'});
+
+      if (_errorLog.length > 1000) _errorLog.removeRange(1000, _errorLog.length);
+      if (_dailyLog.length > 2000) _dailyLog.removeRange(2000, _dailyLog.length);
+    });
+  }
+
+  void _generateMockData() {
+    final int sourceCount = 6;
+    final now = DateTime.now();
+    final previous = oldSnapshot ?? {};
+
+    List<Map<String, dynamic>> newSources = [];
+
+    for (var i = 0; i < sourceCount; i++) {
+      final name = 'Source ${String.fromCharCode(65 + i)}';
+
+      String connKey = _pickConnKey();
+      String repKey = _pickRepKey();
+
+      // occasional forced error
+      if (_rng.nextDouble() < 0.05) connKey = 'error';
+      if (_rng.nextDouble() < 0.05) repKey = 'error';
+
+      DateTime connTs = now.subtract(Duration(minutes: i * 2 + _rng.nextInt(5)));
+      DateTime repTs = now.subtract(Duration(minutes: i * 3 + _rng.nextInt(7)));
+
+      String connDetails = _messageFor(connKey, 'connection', name, connTs);
+      String repDetails = _messageFor(repKey, 'report', name, repTs);
+
+      String connKeyForCompare = connKey;
+      String repKeyForCompare = repKey;
+
+      if (previous.containsKey(name)) {
+        final prev = previous[name] as Map<String, dynamic>;
+        final prevConnKey = prev['connection'] as String?;
+        final prevConnDetails = prev['connectionDetails'] as String?;
+        final prevRepKey = prev['report'] as String?;
+        final prevRepDetails = prev['reportDetails'] as String?;
+
+        // chance to reuse previous details to simulate stale
+        if (_rng.nextDouble() < 0.18) {
+          connDetails = prevConnDetails ?? connDetails;
+          connKeyForCompare = prevConnKey ?? connKeyForCompare;
+        }
+        if (_rng.nextDouble() < 0.18) {
+          repDetails = prevRepDetails ?? repDetails;
+          repKeyForCompare = prevRepKey ?? repKeyForCompare;
+        }
+
+        // If connection identical to previous => stale
+        if (prevConnKey != null && prevConnDetails != null && prevConnKey == connKeyForCompare && prevConnDetails == connDetails) {
+          connKeyForCompare = 'stale';
+          connDetails = _messageFor('stale', 'connection', name, connTs);
+        }
+
+        // Report can only be stale if connection is stale.
+        if (prevRepKey != null && prevRepDetails != null && prevRepKey == repKeyForCompare && prevRepDetails == repDetails) {
+          if (connKeyForCompare == 'stale') {
+            repKeyForCompare = 'stale';
+            repDetails = _messageFor('stale', 'report', name, repTs);
+          } else {
+            // If connection is not stale, treat repeated report as updated (not stale)
+            repKeyForCompare = repKeyForCompare;
+          }
+        }
+
+        // If connection becomes stale and report was identical, mark report stale (redundant check)
+        if (connKeyForCompare == 'stale') {
+          if (prevRepKey == repKeyForCompare && prevRepDetails == repDetails) {
+            repKeyForCompare = 'stale';
+            repDetails = _messageFor('stale', 'report', name, repTs);
+          }
+        }
+      }
+
+      // Enforce strict report constraints:
+      // - report OK only if connection OK
+      // - report DOWN only if connection DOWN
+      // - report STALE only if connection STALE
+      // If constraint violated, adjust report to closest valid state:
+      if (repKeyForCompare == 'ok' && connKeyForCompare != 'ok') {
+        // demote OK to warning unless connection is stale and we want report stale
+        if (connKeyForCompare == 'stale') {
+          repKeyForCompare = 'stale';
+          repDetails = _messageFor('stale', 'report', name, repTs);
+        } else {
+          repKeyForCompare = 'warning';
+          repDetails = _messageFor('warning', 'report', name, repTs);
+        }
+      }
+
+      if (repKeyForCompare == 'down' && connKeyForCompare != 'down') {
+        // if connection isn't down, demote report to error or warning depending on connection
+        if (connKeyForCompare == 'error') {
+          repKeyForCompare = 'error';
+          repDetails = _messageFor('error', 'report', name, repTs);
+        } else {
+          repKeyForCompare = 'warning';
+          repDetails = _messageFor('warning', 'report', name, repTs);
+        }
+      }
+
+      if (repKeyForCompare == 'stale' && connKeyForCompare != 'stale') {
+        // only allow stale when connection is stale; otherwise treat as warning
+        repKeyForCompare = 'warning';
+        repDetails = _messageFor('warning', 'report', name, repTs);
+      }
+
+      // Additionally: if connection is ok but report is error/down (invalid), demote report to warning
+      if ((connKeyForCompare == 'ok' || connKeyForCompare == 'stale') && (repKeyForCompare == 'error' || repKeyForCompare == 'down')) {
+        repKeyForCompare = 'warning';
+        repDetails = _messageFor('warning', 'report', name, repTs);
+      }
+
+      newSources.add({
+        'name': name,
+        'connectionKey': connKeyForCompare,
+        'reportKey': repKeyForCompare,
+        'connectionIcon': _iconForKey(connKeyForCompare),
+        'reportIcon': _iconForKey(repKeyForCompare),
+        'connectionDetails': connDetails,
+        'reportDetails': repDetails,
+      });
+    }
+
+    sources = newSources;
+  }
+
+  String _pickConnKey() {
+    final r = _rng.nextDouble();
+    if (r < 0.10) return 'down';
+    if (r < 0.30) return 'warning';
+    return 'ok';
+  }
+
+  String _pickRepKey() {
+    final r = _rng.nextDouble();
+    if (r < 0.10) return 'down';
+    if (r < 0.25) return 'warning';
+    return 'ok';
+  }
+
+  String _messageFor(String key, String kind, String name, DateTime ts) {
+    switch (key) {
+      case 'ok':
+        return '$kind OK: ${kind == 'connection' ? "Connected" : "Report received"} at ${ts.toIso8601String()}';
+      case 'stale':
+        return '$kind Stale: New data matches previous snapshot, no new updates';
+      case 'down':
+        return '$kind Down: No response from the source';
+      case 'warning':
+        return '$kind Warning: Partial data or late arrival';
+      case 'error':
+        return '$kind Error: Failed to process incoming data';
+      default:
+        return '$kind Unknown state';
+    }
+  }
+
+  IconData _iconForKey(String k) {
+    switch (k) {
+      case 'ok':
+        return Icons.check;
+      case 'error':
+        return Icons.close;
+      case 'warning':
+        return Icons.warning;
+      case 'stale':
+        return Icons.more_horiz;
+      case 'down':
+        return Icons.cloud_off;
+      default:
+        return Icons.help_outline;
+    }
+  }
+
+  Color _colorForKey(String k) {
+    switch (k) {
+      case 'ok':
+        return Colors.green;
+      case 'error':
+        return Colors.red;
+      case 'warning':
+        return Colors.orange;
+      case 'stale':
+        return Colors.grey;
+      case 'down':
+        return Colors.purple;
+      default:
+        return Colors.black;
+    }
+  }
+
+  List<Map<String, String>> _currentErrorsFromSources() {
+    final List<Map<String, String>> list = [];
+    final now = DateTime.now().toIso8601String();
+
+    for (var s in sources) {
+      final name = s['name'] as String;
+      final connKey = s['connectionKey'] as String;
+      final repKey = s['reportKey'] as String;
+      final connDetails = s['connectionDetails'] as String;
+      final repDetails = s['reportDetails'] as String;
+
+      if (connKey == 'error' || connKey == 'down') {
+        list.add({'time': now, 'description': '$name connection: $connDetails', 'status': connKey.toUpperCase()});
+      }
+      if ((repKey == 'error' || repKey == 'down') && !(connKey == 'ok' || connKey == 'stale')) {
+        list.add({'time': now, 'description': '$name report: $repDetails', 'status': repKey.toUpperCase()});
+      }
+    }
+
+    return list;
+  }
+
+  List<Map<String, String>> _currentLogFromSources() {
+    final List<Map<String, String>> list = [];
+    final now = DateTime.now().toIso8601String();
+
+    for (var s in sources) {
+      final name = s['name'] as String;
+      final connKey = s['connectionKey'] as String;
+      final repKey = s['reportKey'] as String;
+      list.add({'time': now, 'description': '$name - conn:$connKey rep:$repKey', 'status': 'VIEW'});
+    }
+    return list;
   }
 
   @override
@@ -61,244 +404,262 @@ class _HomePageState extends State<HomePage> {
     return Scaffold(
       appBar: AppBar(
         title: Text('Data Watch'),
-        backgroundColor: Colors.blueAccent,
+        backgroundColor: Colors.blue,
         actions: [
           TextButton(
             onPressed: () {
-              Navigator.push(context, MaterialPageRoute(builder: (context) => ErrorPage()));
+              final errors = _currentErrorsFromSources();
+              Navigator.push(context, MaterialPageRoute(builder: (_) => ErrorPage(entries: errors, persistedErrors: _errorLog)));
             },
-            child: Text("Errors", style: TextStyle(color: Colors.white, fontSize: 16)),
+            child: Text('Errors', style: TextStyle(color: Colors.white)),
           ),
           TextButton(
             onPressed: () {
-              Navigator.push(context, MaterialPageRoute(builder: (context) => LogPage()));
+              final logs = _currentLogFromSources();
+              Navigator.push(context, MaterialPageRoute(builder: (_) => LogPage(entries: logs, persistedLogs: _dailyLog)));
             },
-            child: Text("Log", style: TextStyle(color: Colors.white, fontSize: 16)),
+            child: Text('Log', style: TextStyle(color: Colors.white)),
+          ),
+          IconButton(
+            onPressed: () async {
+              await _clearPersistedAll();
+            },
+            icon: Icon(Icons.delete_sweep, color: Colors.white),
+            tooltip: 'Clear persisted snapshot and logs',
           ),
         ],
       ),
       body: Padding(
-        padding: const EdgeInsets.all(20.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Data Source Status', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-            SizedBox(height: 20),
-            Container(
+        padding: const EdgeInsets.all(16),
+        child: Column(children: [
+          Text('Data Source Status', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+          SizedBox(height: 12),
+          Expanded(
+            child: Container(
+              padding: EdgeInsets.all(12),
               decoration: BoxDecoration(
-                border: Border.all(color: Colors.black, width: 2),
+                border: Border.all(color: Colors.black, width: 1.2),
                 borderRadius: BorderRadius.circular(8),
                 color: Colors.white,
               ),
-              padding: EdgeInsets.all(16),
-              child: Column(
-                children: [
-                  Row(
-                    children: [
-                      SizedBox(width: 140),
-                      Expanded(
-                        child: Center(
-                          child: Text('Connection', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 20)),
-                        ),
-                      ),
-                      Expanded(
-                        child: Center(
-                          child: Text('Report Submission', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 20)),
-                        ),
-                      ),
-                    ],
-                  ),
-                  Divider(color: Colors.black),
-                  ...sources.map((source) {
-                    final name = source['name'];
-                    return Padding(
-                      padding: EdgeInsets.symmetric(vertical: 10),
-                      child: Column(
-                        children: [
-                          Row(
-                            children: [
-                              SizedBox(
-                                width: 140,
-                                child: Text(name, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 20)),
+              child: Column(children: [
+                Row(children: [
+                  SizedBox(width: 140, child: Text('', style: TextStyle(fontWeight: FontWeight.bold))),
+                  Expanded(child: Center(child: Text('Connection', style: TextStyle(fontWeight: FontWeight.bold)))),
+                  Expanded(child: Center(child: Text('Report', style: TextStyle(fontWeight: FontWeight.bold)))),
+                ]),
+                Divider(color: Colors.black),
+                Expanded(
+                  child: ListView.separated(
+                    separatorBuilder: (_, __) => SizedBox(height: 8),
+                    itemCount: sources.length,
+                    itemBuilder: (context, idx) {
+                      final s = sources[idx];
+                      final name = s['name'] as String;
+                      final connKey = s['connectionKey'] as String;
+                      final repKey = s['reportKey'] as String;
+                      final connIcon = s['connectionIcon'] as IconData;
+                      final repIcon = s['reportIcon'] as IconData;
+                      final connDetails = s['connectionDetails'] as String;
+                      final repDetails = s['reportDetails'] as String;
+
+                      return Column(children: [
+                        Row(children: [
+                          SizedBox(width: 140, child: Text(name, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16))),
+                          Expanded(
+                            child: ElevatedButton(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.white,
+                                foregroundColor: Colors.black,
+                                side: BorderSide(color: Colors.black45),
+                                padding: EdgeInsets.symmetric(vertical: 14),
                               ),
-                              Expanded(
-                                child: ElevatedButton(
-                                  onPressed: () {
-                                    setState(() {
-                                      expandedConnection[name] = !expandedConnection[name]!;
-                                    });
-                                  },
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: Colors.white,
-                                    foregroundColor: Colors.black,
-                                    side: BorderSide(color: Colors.black),
-                                    padding: EdgeInsets.symmetric(vertical: 18, horizontal: 24),
-                                  ),
-                                  child: Icon(source['connection'], color: _getIconColor(source['connection']), size: 30),
-                                ),
-                              ),
-                              Expanded(
-                                child: ElevatedButton(
-                                  onPressed: () {
-                                    setState(() {
-                                      expandedReport[name] = !expandedReport[name]!;
-                                    });
-                                  },
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: Colors.white,
-                                    foregroundColor: Colors.black,
-                                    side: BorderSide(color: Colors.black),
-                                    padding: EdgeInsets.symmetric(vertical: 18, horizontal: 24),
-                                  ),
-                                  child: Icon(source['report'], color: _getIconColor(source['report']), size: 30),
-                                ),
-                              ),
-                            ],
+                              onPressed: () {
+                                _showDetailsDialog(context, '$name - Connection', connDetails, connKey);
+                              },
+                              child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                                Icon(connIcon, color: _colorForKey(connKey)),
+                                SizedBox(width: 8),
+                                Text(connKey.toUpperCase(), style: TextStyle(color: _colorForKey(connKey))),
+                              ]),
+                            ),
                           ),
-                          if (expandedConnection[name]!)
-                            Padding(
-                              padding: EdgeInsets.only(top: 8),
-                              child: Align(
-                                alignment: Alignment.centerLeft,
-                                child: Text(source['connectionDetails'], style: TextStyle(fontSize: 16)),
+                          SizedBox(width: 8),
+                          Expanded(
+                            child: ElevatedButton(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.white,
+                                foregroundColor: Colors.black,
+                                side: BorderSide(color: Colors.black45),
+                                padding: EdgeInsets.symmetric(vertical: 14),
                               ),
+                              onPressed: () {
+                                _showDetailsDialog(context, '$name - Report', repDetails, repKey);
+                              },
+                              child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                                Icon(repIcon, color: _colorForKey(repKey)),
+                                SizedBox(width: 8),
+                                Text(repKey.toUpperCase(), style: TextStyle(color: _colorForKey(repKey))),
+                              ]),
                             ),
-                          if (expandedReport[name]!)
-                            Padding(
-                              padding: EdgeInsets.only(top: 8),
-                              child: Align(
-                                alignment: Alignment.centerRight,
-                                child: Text(source['reportDetails'], style: TextStyle(fontSize: 16)),
-                              ),
-                            ),
-                        ],
-                      ),
-                    );
-                  }),
-                ],
-              ),
-            ),
-            Spacer(),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                Container(
-                  decoration: BoxDecoration(
-                    border: Border.all(color: Colors.black, width: 2),
-                    borderRadius: BorderRadius.circular(8),
-                    color: Colors.white,
-                  ),
-                  padding: EdgeInsets.all(16),
-                  margin: EdgeInsets.only(bottom: 12, right: 12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Legend', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 20)),
-                      SizedBox(height: 12),
-                      _buildLegendRow(Icons.check, 'OK'),
-                      _buildLegendRow(Icons.close, 'Error'),
-                      _buildLegendRow(Icons.warning, 'Issue'),
-                      _buildLegendRow(Icons.more_horiz, 'Stale/Processing'),
-                    ],
+                          ),
+                        ]),
+                      ]);
+                    },
                   ),
                 ),
-              ],
+              ]),
             ),
-          ],
-        ),
-      ),
-      bottomNavigationBar: BottomAppBar(
-        color: Colors.blueAccent,
-        height: 50,
-        child: SizedBox(
-          height: 50,
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Padding(
-                padding: EdgeInsets.only(left: 16),
-                child: Text('Data Watch', style: TextStyle(color: Colors.black, fontSize: 16)),
-              ),
-            ],
           ),
-        ),
+          SizedBox(height: 12),
+          _buildLegend(),
+        ]),
       ),
     );
   }
 
-  Widget _buildLegendRow(IconData icon, String label) {
-    return Padding(
-      padding: EdgeInsets.symmetric(vertical: 6),
-      child: Row(
-        children: [
-          Icon(icon, size: 24, color: _getIconColor(icon)),
-          SizedBox(width: 12),
-          Text(label, style: TextStyle(fontSize: 18)),
-        ],
+  Widget _buildLegend() {
+    return Container(
+      padding: EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        border: Border.all(color: Colors.black, width: 1.2),
+        borderRadius: BorderRadius.circular(8),
+        color: Colors.white,
       ),
+      child: Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
+        _legendItem(Icons.check, 'OK', Colors.green),
+        _legendItem(Icons.more_horiz, 'Stale', Colors.grey),
+        _legendItem(Icons.cloud_off, 'Down', Colors.purple),
+        _legendItem(Icons.warning, 'Warning', Colors.orange),
+        _legendItem(Icons.close, 'Error', Colors.red),
+      ]),
     );
   }
 
-  Color _getIconColor(IconData icon) {
-    if (icon == Icons.check) return Colors.green;
-    if (icon == Icons.close) return Colors.red;
-    if (icon == Icons.warning) return Colors.orange;
-    return Colors.grey;
+  Widget _legendItem(IconData icon, String label, Color color) {
+    return Row(children: [Icon(icon, color: color), SizedBox(width: 6), Text(label)]);
+  }
+
+  void _showDetailsDialog(BuildContext context, String title, String content, String key) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Row(children: [Text(title), Spacer(), Icon(_iconForKey(key), color: _colorForKey(key))]),
+        content: Text(content),
+        actions: [TextButton(onPressed: () => Navigator.of(context).pop(), child: Text('Close'))],
+      ),
+    );
   }
 }
 
 class ErrorPage extends StatelessWidget {
-  final List<Map<String, String>> errorEntries = [
-    {'time': '2025-10-02 13:09', 'description': 'Sensor dropout detected', 'status': 'Unresolved'},
-    {'time': '2025-10-02 12:45', 'description': 'Voltage spike on Node A', 'status': 'Investigating'},
-  ];
+  final List<Map<String, String>> entries;
+  final List<Map<String, String>> persistedErrors;
+
+  ErrorPage({required this.entries, required this.persistedErrors});
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text('Errors')),
-      body: ListView.builder(
-        itemCount: errorEntries.length,
-        itemBuilder: (context, index) {
-          final entry = errorEntries[index];
-          return Card(
-            margin: EdgeInsets.all(12),
-            child: ListTile(
-              title: Text(entry['description'] ?? '', style: TextStyle(fontSize: 18)),
-              subtitle: Text('Time: ${entry['time']}\nStatus: ${entry['status']}', style: TextStyle(fontSize: 16)),
-            ),
-          );
-        },
+    return DefaultTabController(
+      length: 2,
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text('Errors'),
+          backgroundColor: Colors.blue,
+          bottom: TabBar(tabs: [Tab(text: 'Current View'), Tab(text: 'History')]),
+        ),
+        body: TabBarView(
+          children: [
+            entries.isEmpty
+                ? Center(child: Text('No errors on current view', style: TextStyle(fontSize: 16)))
+                : ListView.builder(
+                    itemCount: entries.length,
+                    itemBuilder: (context, index) {
+                      final e = entries[index];
+                      return Card(
+                        margin: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        child: ListTile(
+                          leading: Icon(Icons.error, color: Colors.red),
+                          title: Text(e['description'] ?? ''),
+                          subtitle: Text('Time: ${e['time']}\nStatus: ${e['status']}', style: TextStyle(fontSize: 13)),
+                        ),
+                      );
+                    },
+                  ),
+            persistedErrors.isEmpty
+                ? Center(child: Text('No persisted errors', style: TextStyle(fontSize: 16)))
+                : ListView.builder(
+                    itemCount: persistedErrors.length,
+                    itemBuilder: (context, index) {
+                      final e = persistedErrors[index];
+                      return Card(
+                        margin: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        child: ListTile(
+                          leading: Icon(Icons.history, color: Colors.redAccent),
+                          title: Text(e['description'] ?? ''),
+                          subtitle: Text('Time: ${e['time']}\nStatus: ${e['status']}', style: TextStyle(fontSize: 13)),
+                        ),
+                      );
+                    },
+                  ),
+          ],
+        ),
       ),
     );
   }
 }
 
 class LogPage extends StatelessWidget {
-  final List<Map<String, String>> logEntries = [
-    {'time': '2025-10-02 12:00', 'description': 'System initialized', 'status': 'OK'},
-    {'time': '2025-10-02 12:30', 'description': 'Heartbeat received from Node B', 'status': 'OK'},
-  ];
+  final List<Map<String, String>> entries;
+  final List<Map<String, String>> persistedLogs;
+
+  LogPage({required this.entries, required this.persistedLogs});
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text('Log')),
-      body: ListView.builder(
-        itemCount: logEntries.length,
-        itemBuilder: (context, index) {
-          final entry = logEntries[index];
-          return Card(
-            margin: EdgeInsets.all(12),
-            child: ListTile(
-              title: Text(entry['description'] ?? '', style: TextStyle(fontSize: 18)),
-              subtitle: Text('Time: ${entry['time']}\nStatus: ${entry['status']}', style: TextStyle(fontSize: 16)),
-            ),
-          );
-        },
+    return DefaultTabController(
+      length: 2,
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text('Log'),
+          backgroundColor: Colors.blue,
+          bottom: TabBar(tabs: [Tab(text: 'Current View'), Tab(text: 'History')]),
+        ),
+        body: TabBarView(children: [
+          entries.isEmpty
+              ? Center(child: Text('No entries on current view', style: TextStyle(fontSize: 16)))
+              : ListView.builder(
+                  itemCount: entries.length,
+                  itemBuilder: (context, index) {
+                    final e = entries[index];
+                    return Card(
+                      margin: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      child: ListTile(
+                        leading: Icon(Icons.article, color: Colors.blueGrey),
+                        title: Text(e['description'] ?? ''),
+                        subtitle: Text('Time: ${e['time']}\nStatus: ${e['status']}', style: TextStyle(fontSize: 13)),
+                      ),
+                    );
+                  },
+                ),
+          persistedLogs.isEmpty
+              ? Center(child: Text('No persisted logs', style: TextStyle(fontSize: 16)))
+              : ListView.builder(
+                  itemCount: persistedLogs.length,
+                  itemBuilder: (context, index) {
+                    final e = persistedLogs[index];
+                    return Card(
+                      margin: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      child: ListTile(
+                        leading: Icon(Icons.history, color: Colors.blueGrey),
+                        title: Text(e['description'] ?? ''),
+                        subtitle: Text('Time: ${e['time']}\nStatus: ${e['status']}', style: TextStyle(fontSize: 13)),
+                      ),
+                    );
+                  },
+                ),
+        ]),
       ),
     );
   }
 }
-
-
