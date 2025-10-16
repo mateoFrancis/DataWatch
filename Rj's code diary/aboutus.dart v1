@@ -1,0 +1,38 @@
+import 'package:flutter/material.dart';
+
+class AboutPage extends StatelessWidget {
+  const AboutPage({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('About Us'),
+        backgroundColor: Colors.blueAccent,
+      ),
+      body: const Padding(
+        padding: EdgeInsets.all(20.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'About DataWatch',
+              style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold),
+            ),
+            SizedBox(height: 20),
+            Text(
+              'DataWatch is a monitoring platform that tracks and visualizes data source connectivity and reporting performance in real time. '
+              'It helps teams detect system issues early, analyze logs, and maintain operational transparency across distributed systems.',
+              style: TextStyle(fontSize: 18, height: 1.4),
+            ),
+            SizedBox(height: 20),
+            Text(
+              'Version 1.0.0 — Developed 2025',
+              style: TextStyle(color: Colors.grey, fontSize: 16),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
