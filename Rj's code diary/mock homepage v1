@@ -1,0 +1,148 @@
+import 'package:datawatch/about_us.dart';
+import 'package:flutter/material.dart';
+
+
+class HomePage extends StatefulWidget {
+  const HomePage({super.key});
+
+  @override
+  _HomePageState createState() => _HomePageState();
+}
+
+class _HomePageState extends State<HomePage> {
+  int _selectedIndex = 0;
+
+  final List<Widget> _pages = const [
+    DashboardPage(),
+    ErrorPage(),
+    LogPage(),
+    AboutPage(),
+  ];
+
+  void _onItemTapped(int index) {
+    setState(() {
+      _selectedIndex = index;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'DataWatch 2025',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
+        backgroundColor: const Color(0xFF3B62FF),
+      ),
+      body: _pages[_selectedIndex],
+      bottomNavigationBar: BottomNavigationBar(
+        currentIndex: _selectedIndex,
+        onTap: _onItemTapped,
+        selectedItemColor: const Color(0xFF3B62FF),
+        unselectedItemColor: Colors.grey,
+        items: const [
+          BottomNavigationBarItem(icon: Icon(Icons.dashboard), label: 'Dashboard'),
+          BottomNavigationBarItem(icon: Icon(Icons.error_outline), label: 'Errors'),
+          BottomNavigationBarItem(icon: Icon(Icons.list_alt), label: 'Logs'),
+          BottomNavigationBarItem(icon: Icon(Icons.info_outline), label: 'About Us'),
+        ],
+      ),
+    );
+  }
+}
+
+class DashboardPage extends StatelessWidget {
+  const DashboardPage({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return const Center(
+      child: Text(
+        'System Dashboard',
+        style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+      ),
+    );
+  }
+}
+
+class ErrorPage extends StatelessWidget {
+  final List<Map<String, String>> errorEntries = const [
+    {
+      'time': '2025-10-02 13:09',
+      'description': 'Sensor dropout detected',
+      'status': 'Unresolved'
+    },
+    {
+      'time': '2025-10-02 12:45',
+      'description': 'Voltage spike on Node A',
+      'status': 'Investigating'
+    },
+  ];
+
+  const ErrorPage({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView.builder(
+      itemCount: errorEntries.length,
+      itemBuilder: (context, index) {
+        final entry = errorEntries[index];
+        return Card(
+          margin: const EdgeInsets.all(12),
+          elevation: 3,
+          child: ListTile(
+            leading: const Icon(Icons.error, color: Colors.red),
+            title: Text(entry['description'] ?? '',
+                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            subtitle: Text(
+              'Time: ${entry['time']}\nStatus: ${entry['status']}',
+              style: const TextStyle(fontSize: 16),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class LogPage extends StatelessWidget {
+  final List<Map<String, String>> logEntries = const [
+    {
+      'time': '2025-10-02 12:00',
+      'description': 'System initialized',
+      'status': 'OK'
+    },
+    {
+      'time': '2025-10-02 12:30',
+      'description': 'Heartbeat received from Node B',
+      'status': 'OK'
+    },
+  ];
+
+  const LogPage({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView.builder(
+      itemCount: logEntries.length,
+      itemBuilder: (context, index) {
+        final entry = logEntries[index];
+        return Card(
+          margin: const EdgeInsets.all(12),
+          elevation: 3,
+          child: ListTile(
+            leading: const Icon(Icons.event_note, color: Colors.blue),
+            title: Text(entry['description'] ?? '',
+                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            subtitle: Text(
+              'Time: ${entry['time']}\nStatus: ${entry['status']}',
+              style: const TextStyle(fontSize: 16),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
