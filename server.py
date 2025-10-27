@@ -17,8 +17,8 @@ app = Flask(__name__)
 def home():
     return "Hello, World!"
 
-# API route
-@app.route("/data")   # Make sure this is NOT commented
+# API route 
+@app.route("/data")
 def get_data():
     data = fetch_weather(["90001"])
     #data = fetch_weather(["Los Angeles"])
