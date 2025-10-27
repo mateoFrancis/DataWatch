@@ -8,11 +8,12 @@ DROP PROCEDURE IF EXISTS add_user;
 CREATE PROCEDURE add_user (
     IN p_username VARCHAR(255),
     IN p_email VARCHAR(255),
-    IN p_password_hash VARCHAR(255)
+    IN p_password_hash VARCHAR(255),
+    IN P_created_at DATETIME
 )
 BEGIN
     INSERT INTO users (username, email, password_hash, created_at)
-    VALUES (p_username, p_email, p_password_hash, NOW());
+    VALUES (p_username, p_email, p_password_hash, P_created_at);
 END //
 
 
