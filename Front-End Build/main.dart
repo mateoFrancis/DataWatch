@@ -58,7 +58,7 @@ class _LoginPageState extends State<LoginPage> {
     final username = _usernameController.text.trim();
     final password = _passwordController.text;
 
-    if (username == "admin" && password == "1234") {
+    if (username == "" && password == "") {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('loggedIn', true);
       if (!mounted) return;
