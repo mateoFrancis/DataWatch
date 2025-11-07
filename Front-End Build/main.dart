@@ -8,9 +8,11 @@ void main() {
   runApp(const MyApp());
 }
 
+// Root widget for the app
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
+  // Check login state from SharedPreferences
   Future<bool> _checkLoggedIn() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getBool('loggedIn') ?? false;
@@ -21,6 +23,7 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'DataWatch',
       theme: ThemeData(primarySwatch: Colors.blue),
+      // Decide whether to show HomePage or LoginPage based on login state
       home: FutureBuilder<bool>(
         future: _checkLoggedIn(),
         builder: (context, snapshot) {
@@ -35,6 +38,7 @@ class MyApp extends StatelessWidget {
   }
 }
 
+// Login page widget
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
 
@@ -54,6 +58,7 @@ class _LoginPageState extends State<LoginPage> {
     super.dispose();
   }
 
+  // Handle login logic
   Future<void> _login() async {
     final username = _usernameController.text.trim();
     final password = _passwordController.text;
@@ -85,11 +90,22 @@ class _LoginPageState extends State<LoginPage> {
                 const SizedBox(height: 6),
                 const Text('Sign In to continue', style: TextStyle(fontSize: 18)),
                 const SizedBox(height: 20),
-                TextField(controller: _usernameController, decoration: const InputDecoration(labelText: 'Username', border: OutlineInputBorder())),
+                TextField(
+                  controller: _usernameController,
+                  decoration: const InputDecoration(labelText: 'Username', border: OutlineInputBorder()),
+                ),
                 const SizedBox(height: 12),
-                TextField(controller: _passwordController, decoration: const InputDecoration(labelText: 'Password', border: OutlineInputBorder()), obscureText: true),
+                TextField(
+                  controller: _passwordController,
+                  decoration: const InputDecoration(labelText: 'Password', border: OutlineInputBorder()),
+                  obscureText: true,
+                ),
                 const SizedBox(height: 12),
-                SizedBox(width: double.infinity, height: 48, child: ElevatedButton(onPressed: _login, child: const Text('Login'))),
+                SizedBox(
+                  width: double.infinity,
+                  height: 48,
+                  child: ElevatedButton(onPressed: _login, child: const Text('Login')),
+                ),
                 const SizedBox(height: 12),
                 TextButton(
                   onPressed: () {
@@ -119,6 +135,7 @@ class _LoginPageState extends State<LoginPage> {
   }
 }
 
+// Inline About section shown on LoginPage
 class AboutInline extends StatelessWidget {
   const AboutInline({super.key});
 
@@ -143,4 +160,5 @@ class AboutInline extends StatelessWidget {
     );
   }
 }
+
 
