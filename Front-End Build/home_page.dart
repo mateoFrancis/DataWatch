@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
 
 import 'about_page.dart'; // small About reuse from a separate file
+import 'main.dart'; // for LoginPage navigation on logout
 
 // Persisted keys
 const String PREFS_OLD_SNAPSHOT = 'oldSnapshot';
@@ -361,22 +362,17 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       // due time logic
       final dueToday = DateTime(now.year, now.month, now.day, dueHour, dueMinute);
       final dueWindowStart = dueToday.subtract(const Duration(minutes: 30));
-      // if current time before due and we have report -> OK/Warning per variance
-      // if after due: if report hasn't been received (repTs earlier than due) then error
-      // if within 30 mins before due and missing, warn
       final hasRecentReport = repTs.isAfter(dueWindowStart);
       if (now.isBefore(dueToday)) {
         // before due: report is acceptable (unless variance warning)
-        // keep finalRepKey as is (either ok/warning)
       } else {
         // now >= due time
         if (!hasRecentReport) {
           // no recent report around due: error
           finalRepKey = 'error';
         } else {
-          // report exists but might be late or ok; if repTs after due -> late submission
+          // report exists but might be late; if repTs after due -> late submission
           if (repTs.isAfter(dueToday)) {
-            // still mark ok/warning based on variance, but add late log entry
             _dailyLog.insert(0, {
               'time': DateTime.now().toIso8601String(),
               'description': '$name late report submitted at ${repTs.toIso8601String()}',
@@ -386,7 +382,6 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
           }
         }
       }
-
       // within 30 minutes before due but no recent report => warning
       if (now.isAfter(dueWindowStart) && now.isBefore(dueToday)) {
         if (!hasRecentReport) {
@@ -394,10 +389,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         }
       }
 
-      // finalize repDetails
       repDetails = 'value: ${reportValue.toStringAsFixed(2)} at ${repTs.toIso8601String()}';
-
-      // record progress start to animate fill
       _markProgressStart(name);
 
       newSources.add({
@@ -515,6 +507,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     // --- Source C (Open-Meteo: weather) ---
     {
       final name = 'Source C';
+      // Bakersfield approximate coordinates: latitude 35.3733, longitude -119.0187
       final url = 'https://api.open-meteo.com/v1/forecast?latitude=35.3733&longitude=-119.0187&current_weather=true';
       // citation: https://open-meteo.com/
       final probe = await _probeUrl(url, timeout: const Duration(seconds: 5));
@@ -549,10 +542,11 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         if (pct >= variancePercent) finalRepKey = 'warning';
       }
 
+      // Due time logic: Open-Meteo is "now", so we have a report timestamp == now
       final dueToday = DateTime(now.year, now.month, now.day, dueHour, dueMinute);
       final dueWindowStart = dueToday.subtract(const Duration(minutes: 30));
       final repTs = now;
-      final hasRecentReport = true; // we just probed now
+      final hasRecentReport = repTs.isAfter(dueWindowStart);
 
       if (now.isBefore(dueToday)) {
         // before due: ok/warning by variance
@@ -560,7 +554,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         if (!hasRecentReport) {
           finalRepKey = 'error';
         } else {
-          // we have a report at now; if now > due, record late
+          // now > due: late
           if (repTs.isAfter(dueToday)) {
             _dailyLog.insert(0, {
               'time': DateTime.now().toIso8601String(),
@@ -570,10 +564,6 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
             if (_dailyLog.length > 2000) _dailyLog.removeRange(2000, _dailyLog.length);
           }
         }
-      }
-
-      if (now.isAfter(dueWindowStart) && now.isBefore(dueToday)) {
-        // within 30 minutes before due: warn if different logic applies (we have report so OK/warning)
       }
 
       _markProgressStart(name);
@@ -811,7 +801,6 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       }
     }
     // Combine: show animation prominently for the initial period, then fall back to agingPart
-    // weight animationPart for initial seconds
     if (animationPart < 1.0) {
       // during animation, blend: 70% animation + 30% aging
       return (0.7 * animationPart + 0.3 * agingPart).clamp(0.0, 1.0);
@@ -876,6 +865,20 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
             },
             icon: const Icon(Icons.delete_sweep, color: Colors.white),
             tooltip: 'Clear persisted snapshot and logs',
+          ),
+          // NEW LOGOUT BUTTON (navigation only)
+          IconButton(
+            onPressed: () async {
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.setBool('loggedIn', false);
+              Navigator.pushAndRemoveUntil(
+                context,
+                MaterialPageRoute(builder: (context) => const LoginPage()),
+                (Route<dynamic> route) => false,
+              );
+            },
+            icon: const Icon(Icons.logout, color: Colors.white),
+            tooltip: 'Logout',
           ),
         ],
       ),
@@ -1058,6 +1061,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     );
   }
 
+  // Per-source settings dialog with both slider and number input fields
   void _openPerSourceSettings(BuildContext context, String sourceName) {
     final existing = _sourceSettings[sourceName];
     int staleMinutesConn = existing != null && existing['staleMinutesConn'] is int ? existing['staleMinutesConn'] as int : DEFAULT_STALE_MINUTES_CONN;
@@ -1068,6 +1072,26 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     String treatStaleAsConn = existing != null && existing['treatStaleAsConn'] is String ? existing['treatStaleAsConn'] as String : 'stale';
     String treatStaleAsRep = existing != null && existing['treatStaleAsRep'] is String ? existing['treatStaleAsRep'] as String : 'stale';
     String treatMissing = existing != null && existing['treatMissingReportWhenConnOk'] is String ? existing['treatMissingReportWhenConnOk'] as String : 'warning';
+
+    // Controllers for numeric text inputs
+    final connTextCtrl = TextEditingController(text: staleMinutesConn.toString());
+    final repTextCtrl = TextEditingController(text: staleMinutesRep.toString());
+    final varTextCtrl = TextEditingController(text: variancePercent.toStringAsFixed(0));
+    final dueHourCtrl = TextEditingController(text: dueHour.toString());
+    final dueMinuteCtrl = TextEditingController(text: dueMinute.toString());
+
+    void _parseAndClamp() {
+      final c = int.tryParse(connTextCtrl.text);
+      if (c != null) staleMinutesConn = c.clamp(1, 720);
+      final r = int.tryParse(repTextCtrl.text);
+      if (r != null) staleMinutesRep = r.clamp(1, 720);
+      final v = double.tryParse(varTextCtrl.text);
+      if (v != null) variancePercent = v.clamp(0, 200);
+      final dh = int.tryParse(dueHourCtrl.text);
+      if (dh != null) dueHour = dh.clamp(0, 23);
+      final dm = int.tryParse(dueMinuteCtrl.text);
+      if (dm != null) dueMinute = dm.clamp(0, 59);
+    }
 
     showDialog(
       context: context,
@@ -1087,10 +1111,25 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                       max: 720,
                       divisions: 719,
                       label: '$staleMinutesConn',
-                      onChanged: (v) => setD(() => staleMinutesConn = v.toInt()),
+                      onChanged: (v) {
+                        setD(() {
+                          staleMinutesConn = v.toInt();
+                          connTextCtrl.text = staleMinutesConn.toString();
+                        });
+                      },
                     ),
                   ),
-                  Text('$staleMinutesConn'),
+                  const SizedBox(width: 8),
+                  SizedBox(
+                    width: 80,
+                    child: TextField(
+                      controller: connTextCtrl,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(isDense: true, border: OutlineInputBorder()),
+                      onSubmitted: (_) => setD(_parseAndClamp),
+                      onChanged: (_) => setD(_parseAndClamp),
+                    ),
+                  ),
                 ]),
                 Row(children: [
                   const Text('Treat stale as: '),
@@ -1111,10 +1150,25 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                       max: 720,
                       divisions: 719,
                       label: '$staleMinutesRep',
-                      onChanged: (v) => setD(() => staleMinutesRep = v.toInt()),
+                      onChanged: (v) {
+                        setD(() {
+                          staleMinutesRep = v.toInt();
+                          repTextCtrl.text = staleMinutesRep.toString();
+                        });
+                      },
                     ),
                   ),
-                  Text('$staleMinutesRep'),
+                  const SizedBox(width: 8),
+                  SizedBox(
+                    width: 80,
+                    child: TextField(
+                      controller: repTextCtrl,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(isDense: true, border: OutlineInputBorder()),
+                      onSubmitted: (_) => setD(_parseAndClamp),
+                      onChanged: (_) => setD(_parseAndClamp),
+                    ),
+                  ),
                 ]),
                 const SizedBox(height: 12),
                 Align(alignment: Alignment.centerLeft, child: const Text('Variance warning threshold (%)', style: TextStyle(fontWeight: FontWeight.bold))),
@@ -1126,29 +1180,50 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                       max: 200,
                       divisions: 200,
                       label: '${variancePercent.toStringAsFixed(0)}%',
-                      onChanged: (v) => setD(() => variancePercent = v),
+                      onChanged: (v) {
+                        setD(() {
+                          variancePercent = v;
+                          varTextCtrl.text = variancePercent.toStringAsFixed(0);
+                        });
+                      },
                     ),
                   ),
-                  Text('${variancePercent.toStringAsFixed(0)}%'),
+                  const SizedBox(width: 8),
+                  SizedBox(
+                    width: 80,
+                    child: TextField(
+                      controller: varTextCtrl,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(isDense: true, border: OutlineInputBorder()),
+                      onSubmitted: (_) => setD(_parseAndClamp),
+                      onChanged: (_) => setD(_parseAndClamp),
+                    ),
+                  ),
                 ]),
                 const SizedBox(height: 12),
                 Align(alignment: Alignment.centerLeft, child: const Text('Report due time (local)', style: TextStyle(fontWeight: FontWeight.bold))),
                 Row(children: [
                   Expanded(
                     child: Row(children: [
-                      Expanded(
-                        child: DropdownButton<int>(
-                          value: dueHour,
-                          items: List.generate(24, (i) => DropdownMenuItem(value: i, child: Text(i.toString().padLeft(2, '0')))).toList(),
-                          onChanged: (v) => setD(() => dueHour = v ?? 0),
+                      SizedBox(
+                        width: 80,
+                        child: TextField(
+                          controller: dueHourCtrl,
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration(isDense: true, border: OutlineInputBorder(), labelText: 'Hour'),
+                          onSubmitted: (_) => setD(_parseAndClamp),
+                          onChanged: (_) => setD(_parseAndClamp),
                         ),
                       ),
                       const SizedBox(width: 8),
-                      Expanded(
-                        child: DropdownButton<int>(
-                          value: dueMinute,
-                          items: List.generate(60, (i) => DropdownMenuItem(value: i, child: Text(i.toString().padLeft(2, '0')))).toList(),
-                          onChanged: (v) => setD(() => dueMinute = v ?? 0),
+                      SizedBox(
+                        width: 80,
+                        child: TextField(
+                          controller: dueMinuteCtrl,
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration(isDense: true, border: OutlineInputBorder(), labelText: 'Min'),
+                          onSubmitted: (_) => setD(_parseAndClamp),
+                          onChanged: (_) => setD(_parseAndClamp),
                         ),
                       ),
                     ]),
@@ -1169,6 +1244,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
             actions: [
               TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel')),
               TextButton(onPressed: () {
+                _parseAndClamp();
                 _sourceSettings[sourceName] = {
                   'staleMinutesConn': staleMinutesConn,
                   'staleMinutesRep': staleMinutesRep,
@@ -1192,6 +1268,15 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
   void _openGlobalSettings(BuildContext context) {
     int refreshSeconds = _refreshSeconds;
+    final refreshCtrl = TextEditingController(text: refreshSeconds.toString());
+
+    void _parseRefresh() {
+      final r = int.tryParse(refreshCtrl.text);
+      if (r != null) {
+        refreshSeconds = r.clamp(5, 3600);
+      }
+    }
+
     showDialog(
       context: context,
       builder: (ctx) {
@@ -1209,15 +1294,31 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                     max: 3600,
                     divisions: 119,
                     label: '$refreshSeconds',
-                    onChanged: (v) => setD(() => refreshSeconds = v.toInt()),
+                    onChanged: (v) {
+                      setD(() {
+                        refreshSeconds = v.toInt();
+                        refreshCtrl.text = refreshSeconds.toString();
+                      });
+                    },
                   ),
                 ),
-                Text('$refreshSeconds'),
+                const SizedBox(width: 8),
+                SizedBox(
+                  width: 90,
+                  child: TextField(
+                    controller: refreshCtrl,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(isDense: true, border: OutlineInputBorder()),
+                    onSubmitted: (_) => setD(_parseRefresh),
+                    onChanged: (_) => setD(_parseRefresh),
+                  ),
+                ),
               ]),
             ]),
             actions: [
               TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel')),
               TextButton(onPressed: () async {
+                _parseRefresh();
                 _refreshSeconds = refreshSeconds;
                 await _saveSettingsPrefs();
                 _startTimer();
@@ -1232,10 +1333,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   }
 }
 
-// -----------------------
-// Error and Log Pages
-// -----------------------
-
+// Error and LogPage
 class ErrorPage extends StatelessWidget {
   final List<Map<String, String>> entries;
   final List<Map<String, String>> persistedErrors;
@@ -1347,4 +1445,3 @@ class LogPage extends StatelessWidget {
     );
   }
 }
-
