@@ -504,170 +504,208 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       });
     }
 
-    // --- Source C (Open-Meteo: weather) ---
+    // --- Source C (Open-Meteo: weather)
+    // BACKEND INTEGRATION GUIDE:
+    // - Pattern: "HTTP probe → parse JSON → extract numeric 'reportValue' → apply status logic".
+    // - Replace this entire block for your real Source C endpoint:
+    //   1) Call your API URL (GET/POST as needed).
+    //   2) Parse the JSON body.
+    //   3) Choose a SINGLE numeric metric to act as 'reportValue' (double).
+    //   4) Set 'repKey' to 'ok' if the metric is present/valid, otherwise 'warning' (or 'error' if parsing fails).
+    //   5) Leave connection status based on HTTP response/latency; tweak rules as needed.
+    // - Where to plug custom logic:
+    //   * Extraction: see `_mapProbeToKeysAndValue(...)` for mapping body → report value.
+    //   * Variance/due-time/staleness: applied below uniformly across sources.
+    // - IMPORTANT: Ensure 'reportValue' is a double (num.toDouble()) and include timestamps to support "late submission" logs.
     {
-      final name = 'Source C';
-      // Bakersfield approximate coordinates: latitude 35.3733, longitude -119.0187
-      final url = 'https://api.open-meteo.com/v1/forecast?latitude=35.3733&longitude=-119.0187&current_weather=true';
+      final name = 'Source C'; // declare the source name string
+      final url = 'https://api.open-meteo.com/v1/forecast?latitude=35.3733&longitude=-119.0187&current_weather=true'; // API URL used for this probe
       // citation: https://open-meteo.com/
-      final probe = await _probeUrl(url, timeout: const Duration(seconds: 5));
-      final latency = probe['latencyMs'] as int? ?? 9999;
-      final pbody = probe['body'] as Map<String, dynamic>?;
-      final pstatus = probe['status'] as String;
+      final probe = await _probeUrl(url, timeout: const Duration(seconds: 5)); // perform HTTP GET and measure latency/status
+      final latency = probe['latencyMs'] as int? ?? 9999; // read latency from probe result, default large if missing
+      final pbody = probe['body'] as Map<String, dynamic>?; // parse JSON body if any (may be null)
+      final pstatus = probe['status'] as String; // normalized probe status ('ok', 'warning', 'down', 'error')
 
-      final mapped = _mapProbeToKeysAndValue(name, pbody, pstatus);
-      String connKeyForCompare = mapped['connection'] ?? 'down';
-      String repKeyForCompare = mapped['report'] ?? 'warning';
-      final double? reportValue = mapped['value'] as double?;
+      // MAPPING: Take the API body and map into standardized keys + numeric value.
+      // For your API, edit `_mapProbeToKeysAndValue` or replicate inline here.
+      final mapped = _mapProbeToKeysAndValue(name, pbody, pstatus); // translate probe body/status to our internal keys and value
+      String connKeyForCompare = mapped['connection'] ?? 'down'; // connection key to display (default to 'down' if missing)
+      String repKeyForCompare = mapped['report'] ?? 'warning'; // report key to display (default 'warning')
+      final double? reportValue = mapped['value'] as double?; // numeric report value extracted by mapping (nullable)
 
-      final nowTs = DateTime.now();
-      final connDetails = 'connection ${connKeyForCompare.toUpperCase()}: ${latency}ms to Open-Meteo';
-      final repDetails = reportValue != null ? 'value: ${reportValue.toStringAsFixed(2)}' : 'no value';
+      final nowTs = DateTime.now(); // current timestamp used for last-updated fields
+      final connDetails = 'connection ${connKeyForCompare.toUpperCase()}: ${latency}ms to Open-Meteo'; // user-facing connection details string
+      final repDetails = reportValue != null ? 'value: ${reportValue.toStringAsFixed(2)}' : 'no value'; // user-facing report details string
 
-      final settings = _sourceSettings[name];
-      final staleMinutesConn = settings != null && settings['staleMinutesConn'] is int ? settings['staleMinutesConn'] as int : DEFAULT_STALE_MINUTES_CONN;
-      final staleMinutesRep = settings != null && settings['staleMinutesRep'] is int ? settings['staleMinutesRep'] as int : DEFAULT_STALE_MINUTES_REP;
-      final variancePercent = settings != null && settings['variancePercent'] is num ? (settings['variancePercent'] as num).toDouble() : DEFAULT_VARIANCE_PERCENT;
-      final dueHour = settings != null && settings['reportDueHour'] is int ? settings['reportDueHour'] as int : 0;
-      final dueMinute = settings != null && settings['reportDueMinute'] is int ? settings['reportDueMinute'] as int : 0;
+      // READ SETTINGS: staleness thresholds, variance %, due-time window.
+      final settings = _sourceSettings[name]; // per-source settings map if present
+      final staleMinutesConn = settings != null && settings['staleMinutesConn'] is int ? settings['staleMinutesConn'] as int : DEFAULT_STALE_MINUTES_CONN; // conn stale threshold
+      final staleMinutesRep = settings != null && settings['staleMinutesRep'] is int ? settings['staleMinutesRep'] as int : DEFAULT_STALE_MINUTES_REP; // report stale threshold
+      final variancePercent = settings != null && settings['variancePercent'] is num ? (settings['variancePercent'] as num).toDouble() : DEFAULT_VARIANCE_PERCENT; // variance threshold
+      final dueHour = settings != null && settings['reportDueHour'] is int ? settings['reportDueHour'] as int : 0; // report due hour
+      final dueMinute = settings != null && settings['reportDueMinute'] is int ? settings['reportDueMinute'] as int : 0; // report due minute
 
-      if (pstatus == 'ok' && latency > 1500) connKeyForCompare = 'warning';
+      // CONNECTION STATUS: Example rule — big latency becomes 'warning' even if HTTP 200.
+      if (pstatus == 'ok' && latency > 1500) connKeyForCompare = 'warning'; // mark connection as warning if latency high
 
-      // variance check against prev value if available
-      final prevValue = prev.containsKey(name) ? (prev[name]['reportValue'] as num?)?.toDouble() : null;
-      String finalRepKey = repKeyForCompare;
-      if (reportValue != null && prevValue != null) {
-        final diff = (reportValue - prevValue).abs();
-        final pct = prevValue == 0 ? (diff > 0 ? 100.0 : 0.0) : (diff / prevValue * 100.0);
-        if (pct >= variancePercent) finalRepKey = 'warning';
+      // VARIANCE CHECK: Compare current value to previous to flag abnormal jumps/drifts.
+      // For your API: pick a meaningful metric; avoid unit changes (e.g., ms→s) between reports.
+      final prevValue = prev.containsKey(name) ? (prev[name]['reportValue'] as num?)?.toDouble() : null; // previous numeric value if available
+      String finalRepKey = repKeyForCompare; // start with mapped report key
+      if (reportValue != null && prevValue != null) { // only compute variance if both current and previous available
+        final diff = (reportValue - prevValue).abs(); // absolute difference
+        final pct = prevValue == 0 ? (diff > 0 ? 100.0 : 0.0) : (diff / prevValue * 100.0); // percent change vs previous
+        if (pct >= variancePercent) finalRepKey = 'warning'; // flag as warning if percent change exceeds threshold
       }
 
-      // Due time logic: Open-Meteo is "now", so we have a report timestamp == now
-      final dueToday = DateTime(now.year, now.month, now.day, dueHour, dueMinute);
-      final dueWindowStart = dueToday.subtract(const Duration(minutes: 30));
-      final repTs = now;
-      final hasRecentReport = repTs.isAfter(dueWindowStart);
+      // DUE-TIME & LATE SUBMISSION:
+      // - We treat the current probe time as the "report timestamp".
+      // - If now is past the configured due time and no report in the last 30 minutes, mark 'error'.
+      // - If a report arrives after due time, we mark status OK/WARNING but log a 'LATE' event.
+      final dueToday = DateTime(nowTs.year, nowTs.month, nowTs.day, dueHour, dueMinute); // create today's due time
+      final dueWindowStart = dueToday.subtract(const Duration(minutes: 30)); // window start to consider "recent"
+      final repTs = nowTs; // use now as report timestamp for this probe
+      final hasRecentReport = repTs.isAfter(dueWindowStart); // whether the report is recent relative to the due window
 
-      if (now.isBefore(dueToday)) {
-        // before due: ok/warning by variance
+      if (nowTs.isBefore(dueToday)) {
+        // before due: ok/warning by variance (no action)
       } else {
         if (!hasRecentReport) {
-          finalRepKey = 'error';
+          finalRepKey = 'error'; // if past due and no recent report, mark error
         } else {
-          // now > due: late
           if (repTs.isAfter(dueToday)) {
             _dailyLog.insert(0, {
               'time': DateTime.now().toIso8601String(),
               'description': '$name late report submitted at ${repTs.toIso8601String()}',
               'status': 'LATE'
-            });
-            if (_dailyLog.length > 2000) _dailyLog.removeRange(2000, _dailyLog.length);
+            }); // log a late submission event in daily log
+            if (_dailyLog.length > 2000) _dailyLog.removeRange(2000, _dailyLog.length); // cap daily log size
           }
         }
       }
 
-      _markProgressStart(name);
+      _markProgressStart(name); // mark animation start for this source
 
       newSources.add({
-        'name': name,
-        'connectionKey': connKeyForCompare,
-        'reportKey': finalRepKey,
-        'connectionIcon': _iconForKey(connKeyForCompare),
-        'reportIcon': _iconForKey(finalRepKey),
-        'connectionDetails': connDetails,
-        'reportDetails': repDetails,
-        'lastConnUpdated': nowTs.toIso8601String(),
-        'lastRepUpdated': nowTs.toIso8601String(),
-        'isUpdatingConn': false,
-        'isUpdatingRep': false,
-        'staleMinutesConn': staleMinutesConn,
-        'staleMinutesRep': staleMinutesRep,
-        'variancePercent': variancePercent,
-        'reportDueHour': dueHour,
-        'reportDueMinute': dueMinute,
-        'reportValue': reportValue,
+        'name': name, // source name
+        'connectionKey': connKeyForCompare, // final connection key to display
+        'reportKey': finalRepKey, // final report key to display
+        'connectionIcon': _iconForKey(connKeyForCompare), // icon derived from connection key
+        'reportIcon': _iconForKey(finalRepKey), // icon derived from report key
+        'connectionDetails': connDetails, // string shown in details dialog
+        'reportDetails': repDetails, // string shown in details dialog
+        'lastConnUpdated': nowTs.toIso8601String(), // timestamp for last connection update
+        'lastRepUpdated': nowTs.toIso8601String(), // timestamp for last report update
+        'isUpdatingConn': false, // UI flag for "updating" state
+        'isUpdatingRep': false, // UI flag for "updating" state
+        'staleMinutesConn': staleMinutesConn, // per-source connection stale threshold saved for UI
+        'staleMinutesRep': staleMinutesRep, // per-source report stale threshold saved for UI
+        'variancePercent': variancePercent, // per-source variance threshold saved for UI
+        'reportDueHour': dueHour, // due hour persisted to settings
+        'reportDueMinute': dueMinute, // due minute persisted to settings
+        'reportValue': reportValue, // numeric report value extracted (nullable)
       });
     }
 
-    // --- Source D (USGS) ---
+    // --- Source D (USGS)
+    // BACKEND INTEGRATION GUIDE:
+    // - This block demonstrates consuming a JSON feed (GeoJSON) and extracting a single numeric metric ('mag').
+    // - For your Source D API, follow this pattern:
+    //   1) Probe your endpoint (consider headers/auth if needed).
+    //   2) Parse JSON; identify a stable numeric metric to represent the report (e.g., "count", "latencyMs", "cpuPct").
+    //   3) Map status:
+    //      - 'connectionKey': derived from HTTP success + latency rules.
+    //      - 'reportKey': 'ok' if metric present; 'warning' if partial/missing; 'error' if parsing failed.
+    //   4) Variance/due-time logic is shared and already applied below.
+    // - If your response is an array:
+    //   * Pick first or aggregate (avg/sum) — be consistent to avoid variance noise.
+    // - Make sure to:
+    //   * Convert metric to double.
+    //   * Set timestamps to support late logging.
+    //   * Keep units consistent (avoid mixing seconds/ms or % vs fractions).
     {
-      final name = 'Source D';
-      final startIso = DateTime.now().subtract(const Duration(hours: 1)).toUtc().toIso8601String();
-      final url = 'https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&limit=1&starttime=$startIso';
+      final name = 'Source D'; // declare source name for lookup and storage
+      final startIso = DateTime.now().subtract(const Duration(hours: 1)).toUtc().toIso8601String(); // compute start time for query parameter
+      final url = 'https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&limit=1&starttime=$startIso'; // build USGS query URL
       // citation: https://earthquake.usgs.gov/fdsnws/event/1/
-      final probe = await _probeUrl(url, timeout: const Duration(seconds: 5));
-      final latency = probe['latencyMs'] as int? ?? 9999;
-      final pbody = probe['body'] as Map<String, dynamic>?;
-      final pstatus = probe['status'] as String;
+      final probe = await _probeUrl(url, timeout: const Duration(seconds: 5)); // execute HTTP probe with timeout
+      final latency = probe['latencyMs'] as int? ?? 9999; // extract latency measured by probe
+      final pbody = probe['body'] as Map<String, dynamic>?; // probe JSON body mapped to Map if available
+      final pstatus = probe['status'] as String; // normalized probe status string
 
-      final mapped = _mapProbeToKeysAndValue(name, pbody, pstatus);
-      String connKeyForCompare = mapped['connection'] ?? 'down';
-      String repKeyForCompare = mapped['report'] ?? 'warning';
-      final double? reportValue = mapped['value'] as double?;
+      // MAPPING: body → standardized conn/report + numeric value.
+      final mapped = _mapProbeToKeysAndValue(name, pbody, pstatus); // use mapping helper to extract keys/value
+      String connKeyForCompare = mapped['connection'] ?? 'down'; // connection key fallback
+      String repKeyForCompare = mapped['report'] ?? 'warning'; // report key fallback
+      final double? reportValue = mapped['value'] as double?; // numeric metric extracted, may be null
 
-      final nowTs = DateTime.now();
-      final connDetails = 'connection ${connKeyForCompare.toUpperCase()}: ${latency}ms to USGS';
-      final repDetails = reportValue != null ? 'magnitude: ${reportValue.toStringAsFixed(2)}' : 'no events';
+      final nowTs = DateTime.now(); // timestamp for this probe
+      final connDetails = 'connection ${connKeyForCompare.toUpperCase()}: ${latency}ms to USGS'; // connection detail string
+      final repDetails = reportValue != null ? 'magnitude: ${reportValue.toStringAsFixed(2)}' : 'no events'; // report detail string
 
-      final settings = _sourceSettings[name];
-      final staleMinutesConn = settings != null && settings['staleMinutesConn'] is int ? settings['staleMinutesConn'] as int : DEFAULT_STALE_MINUTES_CONN;
-      final staleMinutesRep = settings != null && settings['staleMinutesRep'] is int ? settings['staleMinutesRep'] as int : DEFAULT_STALE_MINUTES_REP;
-      final variancePercent = settings != null && settings['variancePercent'] is num ? (settings['variancePercent'] as num).toDouble() : DEFAULT_VARIANCE_PERCENT;
-      final dueHour = settings != null && settings['reportDueHour'] is int ? settings['reportDueHour'] as int : 0;
-      final dueMinute = settings != null && settings['reportDueMinute'] is int ? settings['reportDueMinute'] as int : 0;
+      // READ SETTINGS: thresholds that control staleness/variance/due-time behavior.
+      final settings = _sourceSettings[name]; // load per-source settings if present
+      final staleMinutesConn = settings != null && settings['staleMinutesConn'] is int ? settings['staleMinutesConn'] as int : DEFAULT_STALE_MINUTES_CONN; // conn stale threshold
+      final staleMinutesRep = settings != null && settings['staleMinutesRep'] is int ? settings['staleMinutesRep'] as int : DEFAULT_STALE_MINUTES_REP; // rep stale threshold
+      final variancePercent = settings != null && settings['variancePercent'] is num ? (settings['variancePercent'] as num).toDouble() : DEFAULT_VARIANCE_PERCENT; // variance threshold
+      final dueHour = settings != null && settings['reportDueHour'] is int ? settings['reportDueHour'] as int : 0; // due hour
+      final dueMinute = settings != null && settings['reportDueMinute'] is int ? settings['reportDueMinute'] as int : 0; // due minute
 
-      if (pstatus == 'ok' && latency > 1500) connKeyForCompare = 'warning';
+      // CONNECTION RULE (example): if latency exceeds threshold, mark 'warning'.
+      if (pstatus == 'ok' && latency > 1500) connKeyForCompare = 'warning'; // escalate to warning if latency high
 
-      final prevValue = prev.containsKey(name) ? (prev[name]['reportValue'] as num?)?.toDouble() : null;
-      String finalRepKey = repKeyForCompare;
-      if (reportValue != null && prevValue != null) {
-        final diff = (reportValue - prevValue).abs();
-        final pct = prevValue == 0 ? (diff > 0 ? 100.0 : 0.0) : (diff / prevValue * 100.0);
-        if (pct >= variancePercent) finalRepKey = 'warning';
+      // VARIANCE RULE: compare metric to previous reading to detect sudden changes.
+      final prevValue = prev.containsKey(name) ? (prev[name]['reportValue'] as num?)?.toDouble() : null; // previous metric value
+      String finalRepKey = repKeyForCompare; // start with mapped report key
+      if (reportValue != null && prevValue != null) { // only evaluate if both current and previous exist
+        final diff = (reportValue - prevValue).abs(); // absolute diff
+        final pct = prevValue == 0 ? (diff > 0 ? 100.0 : 0.0) : (diff / prevValue * 100.0); // percent change
+        if (pct >= variancePercent) finalRepKey = 'warning'; // set warning if percent change exceeds threshold
       }
 
-      final dueToday = DateTime(now.year, now.month, now.day, dueHour, dueMinute);
-      final dueWindowStart = dueToday.subtract(const Duration(minutes: 30));
-      final repTs = now;
-      final hasRecentReport = repTs.isAfter(dueWindowStart);
+      // DUE-TIME & LATE SUBMISSION: identical behavior to Source C.
+      final dueToday = DateTime(nowTs.year, nowTs.month, nowTs.day, dueHour, dueMinute); // today's due datetime
+      final dueWindowStart = dueToday.subtract(const Duration(minutes: 30)); // recent window start
+      final repTs = nowTs; // current probe timestamp
+      final hasRecentReport = repTs.isAfter(dueWindowStart); // whether report is recent enough
 
-      if (now.isBefore(dueToday)) {
+      if (nowTs.isBefore(dueToday)) {
         // before due: ok/warning
       } else {
         if (!hasRecentReport) {
-          finalRepKey = 'error';
+          finalRepKey = 'error'; // mark error if past due and no recent report
         } else {
           if (repTs.isAfter(dueToday)) {
             _dailyLog.insert(0, {
               'time': DateTime.now().toIso8601String(),
               'description': '$name late report submitted at ${repTs.toIso8601String()}',
               'status': 'LATE'
-            });
-            if (_dailyLog.length > 2000) _dailyLog.removeRange(2000, _dailyLog.length);
+            }); // log LATE event
+            if (_dailyLog.length > 2000) _dailyLog.removeRange(2000, _dailyLog.length); // cap size
           }
         }
       }
 
-      _markProgressStart(name);
+      _markProgressStart(name); // animate progress for this source
 
       newSources.add({
-        'name': name,
-        'connectionKey': connKeyForCompare,
-        'reportKey': finalRepKey,
-        'connectionIcon': _iconForKey(connKeyForCompare),
-        'reportIcon': _iconForKey(finalRepKey),
-        'connectionDetails': connDetails,
-        'reportDetails': repDetails,
-        'lastConnUpdated': nowTs.toIso8601String(),
-        'lastRepUpdated': nowTs.toIso8601String(),
-        'isUpdatingConn': false,
-        'isUpdatingRep': false,
-        'staleMinutesConn': staleMinutesConn,
-        'staleMinutesRep': staleMinutesRep,
-        'variancePercent': variancePercent,
-        'reportDueHour': dueHour,
-        'reportDueMinute': dueMinute,
-        'reportValue': reportValue,
+        'name': name, // source identifier
+        'connectionKey': connKeyForCompare, // final connection status
+        'reportKey': finalRepKey, // final report status
+        'connectionIcon': _iconForKey(connKeyForCompare), // icon mapping for connection
+        'reportIcon': _iconForKey(finalRepKey), // icon mapping for report
+        'connectionDetails': connDetails, // human-readable connection details
+        'reportDetails': repDetails, // human-readable report details
+        'lastConnUpdated': nowTs.toIso8601String(), // last connection timestamp
+        'lastRepUpdated': nowTs.toIso8601String(), // last report timestamp
+        'isUpdatingConn': false, // UI flag
+        'isUpdatingRep': false, // UI flag
+        'staleMinutesConn': staleMinutesConn, // persisted conn stale threshold
+        'staleMinutesRep': staleMinutesRep, // persisted rep stale threshold
+        'variancePercent': variancePercent, // persisted variance threshold
+        'reportDueHour': dueHour, // persisted due hour
+        'reportDueMinute': dueMinute, // persisted due minute
+        'reportValue': reportValue, // numeric value extracted from API
       });
     }
 
@@ -821,201 +859,296 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   // UI: build, dialogs, settings
   // -----------------------
 
+  // Build a tappable title that:
+  // - limits width to 1/8 of the screen,
+  // - prefers an asset logo (PNG first, then JPG),
+  // - falls back to left-aligned "DataWatch" text if no image is found,
+  // - navigates to AboutPage on tap.
+  Widget _buildLogoTitleButton() {
+    // Compute max width as 1/8 of the current screen width
+    final double maxWidth = MediaQuery.of(context).size.width * 0.125;
+
+    // Reusable left-aligned text fallback
+    Widget _textFallback() {
+      return Align(
+        alignment: Alignment.centerLeft, // left-align inside the title button
+        child: const Text(
+          'DataWatch',
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.white),
+          overflow: TextOverflow.ellipsis, // clip gracefully if very narrow
+        ),
+      );
+    }
+
+    return InkWell(
+      borderRadius: BorderRadius.circular(4),
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const AboutPage()),
+        );
+      },
+      child: SizedBox(
+        height: 28, // typical AppBar title height
+        width: maxWidth, // enforce 1/8 screen width
+        child: Image.asset(
+          'assets/logo.png',
+          fit: BoxFit.contain,
+          // If PNG is missing/unloadable, try JPG; if that fails, show left-aligned text
+          errorBuilder: (ctx, err, stack) {
+            return Image.asset(
+              'assets/logo.jpg',
+              fit: BoxFit.contain,
+              errorBuilder: (ctx2, err2, stack2) {
+                return _textFallback(); // left-aligned text fallback
+              },
+            );
+          },
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Row(
-          children: [
-            const Text('Data Watch'),
-            const SizedBox(width: 8),
-            IconButton(
-              icon: const Icon(Icons.info_outline),
-              tooltip: 'About',
-              onPressed: () {
-                Navigator.push(context, MaterialPageRoute(builder: (context) => const AboutPage()));
-              },
-            ),
-          ],
-        ),
+        // Replace plain Text title with tappable logo/title button
+        title: _buildLogoTitleButton(),
         backgroundColor: Colors.blue,
         actions: [
-          TextButton(
-            onPressed: () {
-              final errors = _currentErrorsFromSources();
-              Navigator.push(context, MaterialPageRoute(builder: (_) => ErrorPage(entries: errors, persistedErrors: _errorLog)));
+          // Responsive: show full actions on wide screens, collapse to a menu on narrow screens
+          LayoutBuilder(
+            builder: (context, constraints) {
+              if (constraints.maxWidth > 600) {
+                // Wide screen (desktop/tablet) → show full buttons
+                return Row(children: [
+                  TextButton(
+                    onPressed: () {
+                      final errors = _currentErrorsFromSources();
+                      Navigator.push(context, MaterialPageRoute(builder: (_) => ErrorPage(entries: errors, persistedErrors: _errorLog)));
+                    },
+                    child: const Text('Errors', style: TextStyle(color: Colors.white)),
+                  ),
+                  TextButton(
+                    onPressed: () {
+                      final logs = _currentLogFromSources();
+                      Navigator.push(context, MaterialPageRoute(builder: (_) => LogPage(entries: logs, persistedLogs: _dailyLog)));
+                    },
+                    child: const Text('Log', style: TextStyle(color: Colors.white)),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.settings, color: Colors.white),
+                    tooltip: 'Settings',
+                    onPressed: () => _openGlobalSettings(context),
+                  ),
+                  IconButton(
+                    onPressed: () async {
+                      await _clearPersistedAll();
+                    },
+                    icon: const Icon(Icons.delete_sweep, color: Colors.white),
+                    tooltip: 'Clear persisted snapshot and logs',
+                  ),
+                  IconButton(
+                    onPressed: () async {
+                      final prefs = await SharedPreferences.getInstance();
+                      await prefs.setBool('loggedIn', false);
+                      Navigator.pushAndRemoveUntil(
+                        context,
+                        MaterialPageRoute(builder: (context) => const LoginPage()),
+                        (Route<dynamic> route) => false,
+                      );
+                    },
+                    icon: const Icon(Icons.logout, color: Colors.white),
+                    tooltip: 'Logout',
+                  ),
+                ]);
+              } else {
+                // Narrow screen (mobile) → collapse into a popup menu to avoid covering the title
+                return PopupMenuButton<String>(
+                  icon: const Icon(Icons.more_vert, color: Colors.white),
+                  onSelected: (value) async {
+                    if (value == 'Errors') {
+                      final errors = _currentErrorsFromSources();
+                      Navigator.push(context, MaterialPageRoute(builder: (_) => ErrorPage(entries: errors, persistedErrors: _errorLog)));
+                    } else if (value == 'Log') {
+                      final logs = _currentLogFromSources();
+                      Navigator.push(context, MaterialPageRoute(builder: (_) => LogPage(entries: logs, persistedLogs: _dailyLog)));
+                    } else if (value == 'Settings') {
+                      _openGlobalSettings(context);
+                    } else if (value == 'Clear') {
+                      await _clearPersistedAll();
+                    } else if (value == 'Logout') {
+                      final prefs = await SharedPreferences.getInstance();
+                      await prefs.setBool('loggedIn', false);
+                      Navigator.pushAndRemoveUntil(
+                        context,
+                        MaterialPageRoute(builder: (context) => const LoginPage()),
+                        (Route<dynamic> route) => false,
+                      );
+                    }
+                  },
+                  itemBuilder: (context) => const [
+                    PopupMenuItem(value: 'Errors', child: Text('Errors')),
+                    PopupMenuItem(value: 'Log', child: Text('Log')),
+                    PopupMenuItem(value: 'Settings', child: Text('Settings')),
+                    PopupMenuItem(value: 'Clear', child: Text('Clear Data')),
+                    PopupMenuItem(value: 'Logout', child: Text('Logout')),
+                  ],
+                );
+              }
             },
-            child: const Text('Errors', style: TextStyle(color: Colors.white)),
-          ),
-          TextButton(
-            onPressed: () {
-              final logs = _currentLogFromSources();
-              Navigator.push(context, MaterialPageRoute(builder: (_) => LogPage(entries: logs, persistedLogs: _dailyLog)));
-            },
-            child: const Text('Log', style: TextStyle(color: Colors.white)),
-          ),
-          IconButton(
-            icon: const Icon(Icons.settings, color: Colors.white),
-            tooltip: 'Settings',
-            onPressed: () => _openGlobalSettings(context),
-          ),
-          IconButton(
-            onPressed: () async {
-              await _clearPersistedAll();
-            },
-            icon: const Icon(Icons.delete_sweep, color: Colors.white),
-            tooltip: 'Clear persisted snapshot and logs',
-          ),
-          // NEW LOGOUT BUTTON (navigation only)
-          IconButton(
-            onPressed: () async {
-              final prefs = await SharedPreferences.getInstance();
-              await prefs.setBool('loggedIn', false);
-              Navigator.pushAndRemoveUntil(
-                context,
-                MaterialPageRoute(builder: (context) => const LoginPage()),
-                (Route<dynamic> route) => false,
-              );
-            },
-            icon: const Icon(Icons.logout, color: Colors.white),
-            tooltip: 'Logout',
           ),
         ],
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(children: [
-          const Text('Data Source Status', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 12),
-          Expanded(
-            child: Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                border: Border.all(color: Colors.black, width: 1.2),
-                borderRadius: BorderRadius.circular(8),
-                color: Colors.white,
-              ),
-              child: Column(children: [
-                Row(children: const [
-                  SizedBox(width: 140, child: Text('', style: TextStyle(fontWeight: FontWeight.bold))),
-                  Expanded(child: Center(child: Text('Connection', style: TextStyle(fontWeight: FontWeight.bold)))),
-                  Expanded(child: Center(child: Text('Report', style: TextStyle(fontWeight: FontWeight.bold)))),
-                ]),
-                const Divider(color: Colors.black),
-                Expanded(
-                  child: ListView.separated(
-                    separatorBuilder: (_, __) => const SizedBox(height: 8),
-                    itemCount: sources.length,
-                    itemBuilder: (context, idx) {
-                      final s = sources[idx];
-                      final name = s['name'] as String;
-                      final connKey = s['connectionKey'] as String;
-                      final repKey = s['reportKey'] as String;
-                      final connIcon = s['connectionIcon'] as IconData;
-                      final repIcon = s['reportIcon'] as IconData;
-                      final connDetails = s['connectionDetails'] as String;
-                      final repDetails = s['reportDetails'] as String;
-                      final lastConn = s['lastConnUpdated'] as String?;
-                      final lastRep = s['lastRepUpdated'] as String?;
-                      final isUpdConn = s['isUpdatingConn'] as bool? ?? false;
-                      final isUpdRep = s['isUpdatingRep'] as bool? ?? false;
-                      final staleMinutesConn = s['staleMinutesConn'] as int? ?? DEFAULT_STALE_MINUTES_CONN;
-                      final staleMinutesRep = s['staleMinutesRep'] as int? ?? DEFAULT_STALE_MINUTES_REP;
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          // On wide screens (desktop), keep 1/8 empty space on both sides ⇒ content width = 3/4 of screen.
+          // On mobile, allow more width (e.g., 95%) for comfortable use.
+          final bool isWide = constraints.maxWidth >= 800;
+          final double widthFactor = isWide ? 0.75 : 0.95; // 0.75 leaves 12.5% per side
 
-                      final connProgress = _computeProgressToStale(lastConn, staleMinutesConn, name);
-                      final repProgress = _computeProgressToStale(lastRep, staleMinutesRep, name);
-
-                      return Column(children: [
-                        Row(children: [
-                          SizedBox(
-                            width: 140,
-                            child: Row(children: [
-                              Expanded(child: Text(name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16))),
-                              IconButton(
-                                icon: const Icon(Icons.settings, size: 18),
-                                tooltip: 'Source settings',
-                                onPressed: () => _openPerSourceSettings(context, name),
-                              ),
-                            ]),
-                          ),
-                          Expanded(
-                            child: Column(children: [
-                              Row(children: [
-                                Expanded(
-                                  child: LinearProgressIndicator(
-                                    value: connProgress,
-                                    color: _colorForKey(connKey),
-                                    backgroundColor: _colorForKey(connKey).withOpacity(0.2),
-                                    minHeight: 6,
-                                  ),
-                                ),
-                              ]),
-                              const SizedBox(height: 6),
-                              ElevatedButton(
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.white,
-                                  foregroundColor: Colors.black,
-                                  side: const BorderSide(color: Colors.black45),
-                                  padding: const EdgeInsets.symmetric(vertical: 10),
-                                ),
-                                onPressed: () {
-                                  _showDetailsDialog(context, '$name - Connection', connDetails, connKey, lastConn, isUpdConn);
-                                },
-                                child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                                  Icon(connIcon, color: _colorForKey(connKey)),
-                                  const SizedBox(width: 8),
-                                  Text(connKey.toUpperCase(), style: TextStyle(color: _colorForKey(connKey))),
-                                ]),
-                              ),
-                              const SizedBox(height: 4),
-                              Text('${_formatTime(lastConn)} ${isUpdConn ? " • Updating..." : ""}', style: const TextStyle(fontSize: 12)),
-                            ]),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Column(children: [
-                              Row(children: [
-                                Expanded(
-                                  child: LinearProgressIndicator(
-                                    value: repProgress,
-                                    color: _colorForKey(repKey),
-                                    backgroundColor: _colorForKey(repKey).withOpacity(0.2),
-                                    minHeight: 6,
-                                  ),
-                                ),
-                              ]),
-                              const SizedBox(height: 6),
-                              ElevatedButton(
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.white,
-                                  foregroundColor: Colors.black,
-                                  side: const BorderSide(color: Colors.black45),
-                                  padding: const EdgeInsets.symmetric(vertical: 10),
-                                ),
-                                onPressed: () {
-                                  _showDetailsDialog(context, '$name - Report', repDetails, repKey, lastRep, isUpdRep);
-                                },
-                                child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                                  Icon(repIcon, color: _colorForKey(repKey)),
-                                  const SizedBox(width: 8),
-                                  Text(repKey.toUpperCase(), style: TextStyle(color: _colorForKey(repKey))),
-                                ]),
-                              ),
-                              const SizedBox(height: 4),
-                              Text('${_formatTime(lastRep)} ${isUpdRep ? " • Updating..." : ""}', style: const TextStyle(fontSize: 12)),
-                            ]),
-                          ),
+          return Center(
+            child: FractionallySizedBox(
+              widthFactor: widthFactor,
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(children: [
+                  const Text('Data Source Status', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 12),
+                  Expanded(
+                    child: Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        border: Border.all(color: Colors.black, width: 1.2),
+                        borderRadius: BorderRadius.circular(8),
+                        color: Colors.white,
+                      ),
+                      child: Column(children: [
+                        Row(children: const [
+                          SizedBox(width: 140, child: Text('', style: TextStyle(fontWeight: FontWeight.bold))),
+                          Expanded(child: Center(child: Text('Connection', style: TextStyle(fontWeight: FontWeight.bold)))),
+                          Expanded(child: Center(child: Text('Report', style: TextStyle(fontWeight: FontWeight.bold)))),
                         ]),
-                      ]);
-                    },
+                        const Divider(color: Colors.black),
+                        Expanded(
+                          child: ListView.separated(
+                            separatorBuilder: (_, __) => const SizedBox(height: 8),
+                            itemCount: sources.length,
+                            itemBuilder: (context, idx) {
+                              final s = sources[idx];
+                              final name = s['name'] as String;
+                              final connKey = s['connectionKey'] as String;
+                              final repKey = s['reportKey'] as String;
+                              final connIcon = s['connectionIcon'] as IconData;
+                              final repIcon = s['reportIcon'] as IconData;
+                              final connDetails = s['connectionDetails'] as String;
+                              final repDetails = s['reportDetails'] as String;
+                              final lastConn = s['lastConnUpdated'] as String?;
+                              final lastRep = s['lastRepUpdated'] as String?;
+                              final isUpdConn = s['isUpdatingConn'] as bool? ?? false;
+                              final isUpdRep = s['isUpdatingRep'] as bool? ?? false;
+                              final staleMinutesConn = s['staleMinutesConn'] as int? ?? DEFAULT_STALE_MINUTES_CONN;
+                              final staleMinutesRep = s['staleMinutesRep'] as int? ?? DEFAULT_STALE_MINUTES_REP;
+
+                              final connProgress = _computeProgressToStale(lastConn, staleMinutesConn, name);
+                              final repProgress = _computeProgressToStale(lastRep, staleMinutesRep, name);
+
+                              return Column(children: [
+                                Row(children: [
+                                  SizedBox(
+                                    width: 140,
+                                    child: Row(children: [
+                                      Expanded(child: Text(name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16))),
+                                      IconButton(
+                                        icon: const Icon(Icons.settings, size: 18),
+                                        tooltip: 'Source settings',
+                                        onPressed: () => _openPerSourceSettings(context, name),
+                                      ),
+                                    ]),
+                                  ),
+                                  Expanded(
+                                    child: Column(children: [
+                                      Row(children: [
+                                        Expanded(
+                                          child: LinearProgressIndicator(
+                                            value: connProgress,
+                                            color: _colorForKey(connKey),
+                                            backgroundColor: _colorForKey(connKey).withOpacity(0.2),
+                                            minHeight: 6,
+                                          ),
+                                        ),
+                                      ]),
+                                      const SizedBox(height: 6),
+                                      ElevatedButton(
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: Colors.white,
+                                          foregroundColor: Colors.black,
+                                          side: const BorderSide(color: Colors.black45),
+                                          padding: const EdgeInsets.symmetric(vertical: 10),
+                                        ),
+                                        onPressed: () {
+                                          _showDetailsDialog(context, '$name - Connection', connDetails, connKey, lastConn, isUpdConn);
+                                        },
+                                        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                                          Icon(connIcon, color: _colorForKey(connKey)),
+                                          const SizedBox(width: 8),
+                                          Text(connKey.toUpperCase(), style: TextStyle(color: _colorForKey(connKey))),
+                                        ]),
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text('${_formatTime(lastConn)} ${isUpdConn ? " • Updating..." : ""}', style: const TextStyle(fontSize: 12)),
+                                    ]),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Column(children: [
+                                      Row(children: [
+                                        Expanded(
+                                          child: LinearProgressIndicator(
+                                            value: repProgress,
+                                            color: _colorForKey(repKey),
+                                            backgroundColor: _colorForKey(repKey).withOpacity(0.2),
+                                            minHeight: 6,
+                                          ),
+                                        ),
+                                      ]),
+                                      const SizedBox(height: 6),
+                                      ElevatedButton(
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: Colors.white,
+                                          foregroundColor: Colors.black,
+                                          side: const BorderSide(color: Colors.black45),
+                                          padding: const EdgeInsets.symmetric(vertical: 10),
+                                        ),
+                                        onPressed: () {
+                                          _showDetailsDialog(context, '$name - Report', repDetails, repKey, lastRep, isUpdRep);
+                                        },
+                                        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                                          Icon(repIcon, color: _colorForKey(repKey)),
+                                          const SizedBox(width: 8),
+                                          Text(repKey.toUpperCase(), style: TextStyle(color: _colorForKey(repKey))),
+                                        ]),
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text('${_formatTime(lastRep)} ${isUpdRep ? " • Updating..." : ""}', style: const TextStyle(fontSize: 12)),
+                                    ]),
+                                  ),
+                                ]),
+                              ]);
+                            },
+                          ),
+                        ),
+                      ]),
+                    ),
                   ),
-                ),
-              ]),
+                  const SizedBox(height: 12),
+                  _buildLegend(),
+                ]),
+              ),
             ),
-          ),
-          const SizedBox(height: 12),
-          _buildLegend(),
-        ]),
+          );
+        },
       ),
     );
   }
@@ -1333,7 +1466,10 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   }
 }
 
-// Error and LogPage
+// -----------------------
+// Error and Log Pages
+// -----------------------
+
 class ErrorPage extends StatelessWidget {
   final List<Map<String, String>> entries;
   final List<Map<String, String>> persistedErrors;
