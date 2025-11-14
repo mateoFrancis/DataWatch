@@ -86,10 +86,27 @@ class _LoginPageState extends State<LoginPage> {
             constraints: const BoxConstraints(maxWidth: 520),
             child: Column(
               children: [
+                // ✅ Logo above Welcome, tappable to AboutPage
+                GestureDetector(
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const AboutPage()),
+                    );
+                  },
+                  child: Image.asset(
+                    'assets/main_logo.png',
+                    width: MediaQuery.of(context).size.width * 0.5,
+                    fit: BoxFit.contain,
+                  ),
+                ),
+                const SizedBox(height: 20),
+
                 const Text('Welcome', style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 6),
                 const Text('Sign In to continue', style: TextStyle(fontSize: 18)),
                 const SizedBox(height: 20),
+
                 TextField(
                   controller: _usernameController,
                   decoration: const InputDecoration(labelText: 'Username', border: OutlineInputBorder()),
@@ -101,12 +118,14 @@ class _LoginPageState extends State<LoginPage> {
                   obscureText: true,
                 ),
                 const SizedBox(height: 12),
+
                 SizedBox(
                   width: double.infinity,
                   height: 48,
                   child: ElevatedButton(onPressed: _login, child: const Text('Login')),
                 ),
                 const SizedBox(height: 12),
+
                 TextButton(
                   onPressed: () {
                     setState(() {
@@ -121,11 +140,7 @@ class _LoginPageState extends State<LoginPage> {
                   crossFadeState: _showAboutInline ? CrossFadeState.showSecond : CrossFadeState.showFirst,
                   duration: const Duration(milliseconds: 250),
                 ),
-                const SizedBox(height: 12),
-                TextButton(
-                  onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AboutPage())),
-                  child: const Text('Open About Page'),
-                ),
+                // ❌ Removed the extra "Open About Page" button
               ],
             ),
           ),
@@ -160,5 +175,4 @@ class AboutInline extends StatelessWidget {
     );
   }
 }
-
 
