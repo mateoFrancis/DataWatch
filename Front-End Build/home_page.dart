@@ -860,50 +860,45 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   // -----------------------
 
   // Build a tappable title that:
-  // - limits width to 1/8 of the screen,
-  // - prefers an asset logo (PNG first, then JPG),
-  // - falls back to left-aligned "DataWatch" text if no image is found,
-  // - navigates to AboutPage on tap.
+  // - loads assets/logo.png then assets/logo.jpg;
+  // - if an image loads, shows the image only (no extra text);
+  // - if no image found, shows left-aligned "DataWatch" text;
+  // - on phones (<=600dp) gives the title up to 50% of screen width;
+  // - on larger screens uses 1/8 width and also shows the label text to the right.
   Widget _buildLogoTitleButton() {
-    // Compute max width as 1/8 of the current screen width
-    final double maxWidth = MediaQuery.of(context).size.width * 0.125;
-
-    // Reusable left-aligned text fallback
-    Widget _textFallback() {
-      return Align(
-        alignment: Alignment.centerLeft, // left-align inside the title button
-        child: const Text(
-          'DataWatch',
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.white),
-          overflow: TextOverflow.ellipsis, // clip gracefully if very narrow
-        ),
-      );
-    }
+    final double screenWidth = MediaQuery.of(context).size.width;
+    final bool isPhone = screenWidth <= 600.0;
+    final double widthFactor = isPhone ? 0.20 : 0.125;
+    final double maxWidth = screenWidth * widthFactor;
 
     return InkWell(
-      borderRadius: BorderRadius.circular(4),
+      borderRadius: BorderRadius.circular(6),
       onTap: () {
         Navigator.push(
           context,
           MaterialPageRoute(builder: (_) => const AboutPage()),
         );
       },
-      child: SizedBox(
-        height: 28, // typical AppBar title height
-        width: maxWidth, // enforce 1/8 screen width
+      child: Container(
+        height: 44,
+        width: maxWidth,
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        decoration: BoxDecoration(
+          color: Colors.white, // ✅ white background behind the logo
+          borderRadius: BorderRadius.circular(6),
+        ),
         child: Image.asset(
-          'assets/logo.png',
+          'assets/nav_logo.png',
           fit: BoxFit.contain,
-          // If PNG is missing/unloadable, try JPG; if that fails, show left-aligned text
-          errorBuilder: (ctx, err, stack) {
-            return Image.asset(
-              'assets/logo.jpg',
-              fit: BoxFit.contain,
-              errorBuilder: (ctx2, err2, stack2) {
-                return _textFallback(); // left-aligned text fallback
-              },
-            );
-          },
+          height: 40,
+          errorBuilder: (ctx, err, stack) => const Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              'DataWatch',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.black),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
         ),
       ),
     );
@@ -913,15 +908,24 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        // Replace plain Text title with tappable logo/title button
+        // Ensure title has predictable spacing and doesn't get auto-centered/trimmed.
+        titleSpacing: 0,        // allow title to start near the left edge
+        centerTitle: false,     // left-align title (typical for large screens / Android)
+        leadingWidth: 56,       // reserve standard space for a potential leading widget
+        toolbarHeight: 56,      // consistent height for the AppBar
         title: _buildLogoTitleButton(),
         backgroundColor: Colors.blue,
         actions: [
           // Responsive: show full actions on wide screens, collapse to a menu on narrow screens
           LayoutBuilder(
             builder: (context, constraints) {
-              if (constraints.maxWidth > 600) {
-                // Wide screen (desktop/tablet) → show full buttons
+              final double screenWidth = MediaQuery.of(context).size.width;
+              // Treat widths <= 600 as phone ranges; you can lower to 480 if preferred.
+              // S24 Ultra width in logical pixels typically <= 412 dp in portrait; 600 is safe.
+              final bool isPhone = screenWidth <= 600.0;
+
+              if (!isPhone && constraints.maxWidth > 700) {
+                // Desktop / wide tablet → full action row
                 return Row(children: [
                   TextButton(
                     onPressed: () {
@@ -964,7 +968,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                   ),
                 ]);
               } else {
-                // Narrow screen (mobile) → collapse into a popup menu to avoid covering the title
+                // Phone or narrow width → collapsed popup menu
                 return PopupMenuButton<String>(
                   icon: const Icon(Icons.more_vert, color: Colors.white),
                   onSelected: (value) async {
