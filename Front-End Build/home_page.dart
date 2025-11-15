@@ -17,16 +17,16 @@ const String PREFS_DAILY_LOG = 'dailyLog';
 const String PREFS_REFRESH_INTERVAL = 'refreshIntervalSeconds';
 const String PREFS_SOURCE_SETTINGS = 'sourceSettings';
 
-// Defaults
-const int DEFAULT_REFRESH_SECONDS = 60; // 1 minute default
-const int DEFAULT_STALE_MINUTES_CONN = 5; // 5 minutes default for connection
-const int DEFAULT_STALE_MINUTES_REP = 5; // 5 minutes default for report
-const double DEFAULT_VARIANCE_PERCENT = 10.0; // 10% change -> warning
-const int PROGRESS_ANIMATION_SECONDS = 10; // progress bar fill time
+// Defaults and simple explanations
+const int DEFAULT_REFRESH_SECONDS = 60; // default refresh every 60 seconds
+const int DEFAULT_STALE_MINUTES_CONN = 5; // connection considered stale after this many minutes
+const int DEFAULT_STALE_MINUTES_REP = 5; // report considered stale after this many minutes
+const double DEFAULT_VARIANCE_PERCENT = 10.0; // percent change threshold to mark a warning
+const int PROGRESS_ANIMATION_SECONDS = 10; // how long the "recent update" animation should run
 
-// External API citations (kept as comments for maintainers)
-// Open-Meteo API (forecast/current_weather) — docs: https://open-meteo.com/
-// USGS Earthquake API (FDSN Event query, GeoJSON) — docs: https://earthquake.usgs.gov/fdsnws/event/1/
+// External API info (for maintainers)
+// Open-Meteo: https://open-meteo.com/
+// USGS FDSN event query: https://earthquake.usgs.gov/fdsnws/event/1/
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -48,7 +48,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   int _refreshSeconds = DEFAULT_REFRESH_SECONDS;
   Map<String, Map<String, dynamic>> _sourceSettings = {};
 
-  // track per-source progress start times to animate 10s fill
+  // track per-source progress start times (used for the progress indicator)
   final Map<String, DateTime> _progressStart = {};
 
   @override
@@ -63,14 +63,16 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     super.dispose();
   }
 
+  // Initialize persisted state, generate initial data and start the periodic refresh timer.
   Future<void> _initEverything() async {
-    await _loadPersistedState();
-    await _generateMockData();
-    await _evaluateAndPersistChanges();
-    _startTimer();
+    await _loadPersistedState(); // load prefs and logs
+    await _generateMockData(); // generate initial set of source states
+    await _evaluateAndPersistChanges(); // compare and persist snapshot/logs if changed
+    _startTimer(); // start periodic refreshes
     setState(() {});
   }
 
+  // Load persisted snapshot, logs and settings from shared preferences.
   Future<void> _loadPersistedState() async {
     final prefs = await SharedPreferences.getInstance();
 
@@ -112,31 +114,36 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     if (storedSourceSettings != null) {
       try {
         final decoded = jsonDecode(storedSourceSettings) as Map<String, dynamic>;
-        _sourceSettings = decoded.map((k, v) => MapEntry(k, Map<String, dynamic>.from(v as Map)));
+        _sourceSettings =
+            decoded.map((k, v) => MapEntry(k, Map<String, dynamic>.from(v as Map)));
       } catch (_) {
         _sourceSettings = {};
       }
     }
   }
 
+  // Save logs to preferences.
   Future<void> _savePersistedLogs() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(PREFS_ERROR_LOG, jsonEncode(_errorLog));
     await prefs.setString(PREFS_DAILY_LOG, jsonEncode(_dailyLog));
   }
 
+  // Save snapshot to preferences and keep a reference in memory.
   Future<void> _saveOldSnapshot(Map<String, dynamic> snapshot) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(PREFS_OLD_SNAPSHOT, jsonEncode(snapshot));
     oldSnapshot = snapshot;
   }
 
+  // Save settings to preferences.
   Future<void> _saveSettingsPrefs() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(PREFS_REFRESH_INTERVAL, _refreshSeconds);
     await prefs.setString(PREFS_SOURCE_SETTINGS, jsonEncode(_sourceSettings));
   }
 
+  // Clear all persisted data (snapshot, logs, settings).
   Future<void> _clearPersistedAll() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(PREFS_OLD_SNAPSHOT);
@@ -151,6 +158,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     setState(() {});
   }
 
+  // Start the periodic refresh timer.
   void _startTimer() {
     _refreshTimer?.cancel();
     _refreshTimer = Timer.periodic(Duration(seconds: _refreshSeconds), (timer) async {
@@ -158,12 +166,14 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     });
   }
 
+  // Called on each refresh cycle: regenerate data and persist differences.
   Future<void> _onRefreshCycle() async {
     await _generateMockData();
     await _evaluateAndPersistChanges();
     setState(() {});
   }
 
+  // Build a lightweight snapshot map of the current sources to compare and persist.
   Map<String, dynamic> _buildSnapshotFromSources() {
     final map = <String, dynamic>{};
     for (var s in sources) {
@@ -175,12 +185,13 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         'reportDetails': s['reportDetails'],
         'lastConn': s['lastConnUpdated'],
         'lastRep': s['lastRepUpdated'],
-        'reportValue': s['reportValue'], // numeric or null
+        'reportValue': s['reportValue'],
       };
     }
     return map;
   }
 
+  // Compare snapshot to previously saved snapshot and append logs if changed.
   Future<void> _evaluateAndPersistChanges() async {
     final snapshot = _buildSnapshotFromSources();
     final changed = jsonEncode(snapshot) != jsonEncode(oldSnapshot ?? {});
@@ -191,6 +202,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     }
   }
 
+  // Append error/daily entries based on the snapshot.
   void _appendLogsFromSnapshot(Map<String, dynamic> snapshot) {
     final now = DateTime.now().toIso8601String();
 
@@ -202,12 +214,14 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       final repDetails = entry['reportDetails'] as String? ?? '';
 
       if (conn == 'error' || conn == 'down') {
-        _errorLog.insert(0, {'time': now, 'description': '$name connection: $connDetails', 'status': conn.toUpperCase()});
+        _errorLog.insert(
+            0, {'time': now, 'description': '$name connection: $connDetails', 'status': conn.toUpperCase()});
       }
 
       if ((rep == 'error' || rep == 'down')) {
         if (!(conn == 'ok' || conn == 'stale')) {
-          _errorLog.insert(0, {'time': now, 'description': '$name report: $repDetails', 'status': rep.toUpperCase()});
+          _errorLog.insert(
+              0, {'time': now, 'description': '$name report: $repDetails', 'status': rep.toUpperCase()});
         }
       }
 
@@ -222,6 +236,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   // HTTP probe helpers
   // -----------------------
 
+  // Probe a URL and return a small map with status, latency and parsed JSON body if available.
   Future<Map<String, dynamic>> _probeUrl(String url, {Duration timeout = const Duration(seconds: 5)}) async {
     final result = {'status': 'down', 'latencyMs': 9999, 'body': null};
     try {
@@ -252,15 +267,18 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     return result;
   }
 
-  // Map probe to keys and extract a numeric "reportValue" where available
-  Map<String, dynamic> _mapProbeToKeysAndValue(String sourceName, Map<String, dynamic>? probeBody, String probeStatus) {
+  // Map the probe result to our standardized keys and optionally extract a numeric value.
+  Map<String, dynamic> _mapProbeToKeysAndValue(
+      String sourceName, Map<String, dynamic>? probeBody, String probeStatus) {
     final connKey = probeStatus;
     String repKey = probeStatus;
     double? reportValue;
     try {
       if (sourceName.contains('Source C')) {
-        // Open-Meteo: use temperature in current_weather.temperature as numeric reportValue
-        if (probeBody != null && probeBody['current_weather'] != null && probeBody['current_weather']['temperature'] != null) {
+        // Open-Meteo: current_weather.temperature => numeric value used for variance checks.
+        if (probeBody != null &&
+            probeBody['current_weather'] != null &&
+            probeBody['current_weather']['temperature'] != null) {
           repKey = 'ok';
           final tmp = probeBody['current_weather']['temperature'];
           if (tmp is num) reportValue = tmp.toDouble();
@@ -268,7 +286,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
           repKey = 'warning';
         }
       } else if (sourceName.contains('Source D')) {
-        // USGS: use magnitude of first feature (properties.mag)
+        // USGS: features[0].properties.mag => numeric magnitude.
         if (probeBody != null && probeBody['features'] is List && (probeBody['features'] as List).isNotEmpty) {
           final f = (probeBody['features'] as List).first;
           if (f is Map && f['properties'] is Map && f['properties']['mag'] != null) {
@@ -292,15 +310,15 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   // Data generation (4 sources: A,B mock; C Open-Meteo; D USGS)
   // -----------------------
 
+  // Generate the sources list: two mock sources and two real API probes.
   Future<void> _generateMockData() async {
     final now = DateTime.now();
     final prev = oldSnapshot ?? {};
     List<Map<String, dynamic>> newSources = [];
 
-    // Helper to mark progress start (for animation)
+    // Mark progress start for the "recent update" animation.
     void _markProgressStart(String name) {
       _progressStart[name] = DateTime.now();
-      // schedule a setState after fill period to allow fading
       Future.delayed(const Duration(seconds: PROGRESS_ANIMATION_SECONDS + 1), () {
         if (mounted) setState(() {});
       });
@@ -309,22 +327,17 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     // --- Source A (mock) ---
     {
       final name = 'Source A';
-      // previous report value (if present)
       final prevValue = prev.containsKey(name) ? (prev[name]['reportValue'] as num?)?.toDouble() : null;
 
-      // simulate connection and report
-      String connKey = _pickConnKey();
-      String repKey = _pickRepKey();
+      String connKey = _pickConnKey(); // simulated connectivity state
+      String repKey = _pickRepKey(); // simulated report state
 
-      // simulated numeric report (e.g., a temperature-like number ~ 15-25)
-      double reportValue = 15.0 + _rng.nextDouble() * 10.0;
-      // introduce occasional repeats (so variance can be low)
+      double reportValue = 15.0 + _rng.nextDouble() * 10.0; // simulated metric
       if (_rng.nextDouble() < 0.24 && prevValue != null) {
-        reportValue = prevValue;
+        reportValue = prevValue; // sometimes repeat previous to avoid variance
       }
-      // introduce occasional big jumps
       if (_rng.nextDouble() < 0.06) {
-        reportValue += (_rng.nextBool() ? 1 : -1) * (5 + _rng.nextDouble() * 10);
+        reportValue += (_rng.nextBool() ? 1 : -1) * (5 + _rng.nextDouble() * 10); // occasional spike
       }
 
       DateTime connTs = now.subtract(Duration(minutes: _rng.nextInt(3)));
@@ -333,24 +346,30 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       String connDetails = _messageFor(connKey, 'connection', name, connTs);
       String repDetails = 'value: ${reportValue.toStringAsFixed(2)} at ${repTs.toIso8601String()}';
 
-      // read per-source settings
       final settings = _sourceSettings[name];
-      final staleMinutesConn = settings != null && settings['staleMinutesConn'] is int ? settings['staleMinutesConn'] as int : DEFAULT_STALE_MINUTES_CONN;
-      final staleMinutesRep = settings != null && settings['staleMinutesRep'] is int ? settings['staleMinutesRep'] as int : DEFAULT_STALE_MINUTES_REP;
-      final variancePercent = settings != null && settings['variancePercent'] is num ? (settings['variancePercent'] as num).toDouble() : DEFAULT_VARIANCE_PERCENT;
+      final staleMinutesConn = settings != null && settings['staleMinutesConn'] is int
+          ? settings['staleMinutesConn'] as int
+          : DEFAULT_STALE_MINUTES_CONN;
+      final staleMinutesRep = settings != null && settings['staleMinutesRep'] is int
+          ? settings['staleMinutesRep'] as int
+          : DEFAULT_STALE_MINUTES_REP;
+      final variancePercent = settings != null && settings['variancePercent'] is num
+          ? (settings['variancePercent'] as num).toDouble()
+          : DEFAULT_VARIANCE_PERCENT;
       final dueHour = settings != null && settings['reportDueHour'] is int ? settings['reportDueHour'] as int : 0;
       final dueMinute = settings != null && settings['reportDueMinute'] is int ? settings['reportDueMinute'] as int : 0;
 
-      // connection staleness
-      if (DateTime.now().difference(connTs).inMinutes >= staleMinutesConn && connKey != 'down' && connKey != 'error') {
-        final treatConn = settings != null && settings['treatStaleAsConn'] is String ? settings['treatStaleAsConn'] as String : 'stale';
+      if (DateTime.now().difference(connTs).inMinutes >= staleMinutesConn &&
+          connKey != 'down' &&
+          connKey != 'error') {
+        final treatConn = settings != null && settings['treatStaleAsConn'] is String
+            ? settings['treatStaleAsConn'] as String
+            : 'stale';
         connKey = treatConn;
         connDetails = _messageFor(treatConn, 'connection', name, connTs);
       }
 
-      // determine report status using variance and due time logic
       String finalRepKey = repKey;
-      // variance check
       if (prevValue != null) {
         final diff = (reportValue - prevValue).abs();
         final pct = prevValue == 0 ? (diff > 0 ? 100.0 : 0.0) : (diff / prevValue * 100.0);
@@ -359,19 +378,15 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         }
       }
 
-      // due time logic
       final dueToday = DateTime(now.year, now.month, now.day, dueHour, dueMinute);
       final dueWindowStart = dueToday.subtract(const Duration(minutes: 30));
       final hasRecentReport = repTs.isAfter(dueWindowStart);
       if (now.isBefore(dueToday)) {
-        // before due: report is acceptable (unless variance warning)
+        // before due: nothing additional
       } else {
-        // now >= due time
         if (!hasRecentReport) {
-          // no recent report around due: error
           finalRepKey = 'error';
         } else {
-          // report exists but might be late; if repTs after due -> late submission
           if (repTs.isAfter(dueToday)) {
             _dailyLog.insert(0, {
               'time': DateTime.now().toIso8601String(),
@@ -382,7 +397,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
           }
         }
       }
-      // within 30 minutes before due but no recent report => warning
+
       if (now.isAfter(dueWindowStart) && now.isBefore(dueToday)) {
         if (!hasRecentReport) {
           finalRepKey = 'warning';
@@ -413,7 +428,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       });
     }
 
-    // --- Source B (mock) similar to A but different seed ---
+    // --- Source B (mock) ---
     {
       final name = 'Source B';
       final prevValue = prev.containsKey(name) ? (prev[name]['reportValue'] as num?)?.toDouble() : null;
@@ -421,7 +436,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       String connKey = _pickConnKey();
       String repKey = _pickRepKey();
 
-      double reportValue = 100.0 * (0.5 + _rng.nextDouble()); // some other metric
+      double reportValue = 100.0 * (0.5 + _rng.nextDouble());
       if (_rng.nextDouble() < 0.2 && prevValue != null) reportValue = prevValue;
       if (_rng.nextDouble() < 0.05) reportValue += (_rng.nextBool() ? 1 : -1) * (_rng.nextDouble() * 30);
 
@@ -432,14 +447,24 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       String repDetails = 'value: ${reportValue.toStringAsFixed(2)} at ${repTs.toIso8601String()}';
 
       final settings = _sourceSettings[name];
-      final staleMinutesConn = settings != null && settings['staleMinutesConn'] is int ? settings['staleMinutesConn'] as int : DEFAULT_STALE_MINUTES_CONN;
-      final staleMinutesRep = settings != null && settings['staleMinutesRep'] is int ? settings['staleMinutesRep'] as int : DEFAULT_STALE_MINUTES_REP;
-      final variancePercent = settings != null && settings['variancePercent'] is num ? (settings['variancePercent'] as num).toDouble() : DEFAULT_VARIANCE_PERCENT;
+      final staleMinutesConn = settings != null && settings['staleMinutesConn'] is int
+          ? settings['staleMinutesConn'] as int
+          : DEFAULT_STALE_MINUTES_CONN;
+      final staleMinutesRep = settings != null && settings['staleMinutesRep'] is int
+          ? settings['staleMinutesRep'] as int
+          : DEFAULT_STALE_MINUTES_REP;
+      final variancePercent = settings != null && settings['variancePercent'] is num
+          ? (settings['variancePercent'] as num).toDouble()
+          : DEFAULT_VARIANCE_PERCENT;
       final dueHour = settings != null && settings['reportDueHour'] is int ? settings['reportDueHour'] as int : 0;
       final dueMinute = settings != null && settings['reportDueMinute'] is int ? settings['reportDueMinute'] as int : 0;
 
-      if (DateTime.now().difference(connTs).inMinutes >= staleMinutesConn && connKey != 'down' && connKey != 'error') {
-        final treatConn = settings != null && settings['treatStaleAsConn'] is String ? settings['treatStaleAsConn'] as String : 'stale';
+      if (DateTime.now().difference(connTs).inMinutes >= staleMinutesConn &&
+          connKey != 'down' &&
+          connKey != 'error') {
+        final treatConn = settings != null && settings['treatStaleAsConn'] is String
+            ? settings['treatStaleAsConn'] as String
+            : 'stale';
         connKey = treatConn;
         connDetails = _messageFor(treatConn, 'connection', name, connTs);
       }
@@ -458,7 +483,6 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       final hasRecentReport = repTs.isAfter(dueWindowStart);
 
       if (now.isBefore(dueToday)) {
-        // before due => ok/warning based on variance
       } else {
         if (!hasRecentReport) {
           finalRepKey = 'error';
@@ -504,211 +528,198 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       });
     }
 
-    // --- Source C (Open-Meteo: weather)
-    // BACKEND INTEGRATION GUIDE:
-    // - Pattern: "HTTP probe → parse JSON → extract numeric 'reportValue' → apply status logic".
-    // - Replace this entire block for your real Source C endpoint:
-    //   1) Call your API URL (GET/POST as needed).
-    //   2) Parse the JSON body.
-    //   3) Choose a SINGLE numeric metric to act as 'reportValue' (double).
-    //   4) Set 'repKey' to 'ok' if the metric is present/valid, otherwise 'warning' (or 'error' if parsing fails).
-    //   5) Leave connection status based on HTTP response/latency; tweak rules as needed.
-    // - Where to plug custom logic:
-    //   * Extraction: see `_mapProbeToKeysAndValue(...)` for mapping body → report value.
-    //   * Variance/due-time/staleness: applied below uniformly across sources.
-    // - IMPORTANT: Ensure 'reportValue' is a double (num.toDouble()) and include timestamps to support "late submission" logs.
+    // -----------------------
+    // Source C (Open-Meteo: weather)
+    // Detailed one-line comments for each main step so a junior dev can follow.
+    // -----------------------
     {
-      final name = 'Source C'; // declare the source name string
-      final url = 'https://api.open-meteo.com/v1/forecast?latitude=35.3733&longitude=-119.0187&current_weather=true'; // API URL used for this probe
-      // citation: https://open-meteo.com/
-      final probe = await _probeUrl(url, timeout: const Duration(seconds: 5)); // perform HTTP GET and measure latency/status
-      final latency = probe['latencyMs'] as int? ?? 9999; // read latency from probe result, default large if missing
-      final pbody = probe['body'] as Map<String, dynamic>?; // parse JSON body if any (may be null)
-      final pstatus = probe['status'] as String; // normalized probe status ('ok', 'warning', 'down', 'error')
+      final name = 'Source C'; // define source name
+      final url =
+          'https://api.open-meteo.com/v1/forecast?latitude=35.3733&longitude=-119.0187&current_weather=true'; // Open-Meteo URL
+      // call the API and get probe map
+      final probe = await _probeUrl(url, timeout: const Duration(seconds: 5)); // call the API and get probe map
+      final latency = probe['latencyMs'] as int? ?? 9999; // read latency from probe
+      final pbody = probe['body'] as Map<String, dynamic>?; // read parsed JSON body if any
+      final pstatus = probe['status'] as String; // get normalized status string
 
-      // MAPPING: Take the API body and map into standardized keys + numeric value.
-      // For your API, edit `_mapProbeToKeysAndValue` or replicate inline here.
-      final mapped = _mapProbeToKeysAndValue(name, pbody, pstatus); // translate probe body/status to our internal keys and value
-      String connKeyForCompare = mapped['connection'] ?? 'down'; // connection key to display (default to 'down' if missing)
-      String repKeyForCompare = mapped['report'] ?? 'warning'; // report key to display (default 'warning')
-      final double? reportValue = mapped['value'] as double?; // numeric report value extracted by mapping (nullable)
+      final mapped =
+          _mapProbeToKeysAndValue(name, pbody, pstatus); // map probe body + status to our standardized keys
+      String connKeyForCompare = mapped['connection'] ?? 'down'; // pick connection key or default to 'down'
+      String repKeyForCompare = mapped['report'] ?? 'warning'; // pick report key or default to 'warning'
+      final double? reportValue =
+          mapped['value'] as double?; // numeric value extracted if mapping found one
 
-      final nowTs = DateTime.now(); // current timestamp used for last-updated fields
-      final connDetails = 'connection ${connKeyForCompare.toUpperCase()}: ${latency}ms to Open-Meteo'; // user-facing connection details string
-      final repDetails = reportValue != null ? 'value: ${reportValue.toStringAsFixed(2)}' : 'no value'; // user-facing report details string
+      final nowTs = DateTime.now(); // timestamp used for last update fields
+      final connDetails =
+          'connection ${connKeyForCompare.toUpperCase()}: ${latency}ms to Open-Meteo'; // readable connection detail
+      final repDetails = reportValue != null ? 'value: ${reportValue.toStringAsFixed(2)}' : 'no value'; // readable report detail
 
-      // READ SETTINGS: staleness thresholds, variance %, due-time window.
-      final settings = _sourceSettings[name]; // per-source settings map if present
-      final staleMinutesConn = settings != null && settings['staleMinutesConn'] is int ? settings['staleMinutesConn'] as int : DEFAULT_STALE_MINUTES_CONN; // conn stale threshold
-      final staleMinutesRep = settings != null && settings['staleMinutesRep'] is int ? settings['staleMinutesRep'] as int : DEFAULT_STALE_MINUTES_REP; // report stale threshold
-      final variancePercent = settings != null && settings['variancePercent'] is num ? (settings['variancePercent'] as num).toDouble() : DEFAULT_VARIANCE_PERCENT; // variance threshold
+      final settings = _sourceSettings[name]; // attempt to load per-source settings
+      final staleMinutesConn = settings != null && settings['staleMinutesConn'] is int
+          ? settings['staleMinutesConn'] as int
+          : DEFAULT_STALE_MINUTES_CONN; // connection staleness threshold
+      final staleMinutesRep = settings != null && settings['staleMinutesRep'] is int
+          ? settings['staleMinutesRep'] as int
+          : DEFAULT_STALE_MINUTES_REP; // report staleness threshold
+      final variancePercent = settings != null && settings['variancePercent'] is num
+          ? (settings['variancePercent'] as num).toDouble()
+          : DEFAULT_VARIANCE_PERCENT; // variance percent threshold
       final dueHour = settings != null && settings['reportDueHour'] is int ? settings['reportDueHour'] as int : 0; // report due hour
-      final dueMinute = settings != null && settings['reportDueMinute'] is int ? settings['reportDueMinute'] as int : 0; // report due minute
+      final dueMinute =
+          settings != null && settings['reportDueMinute'] is int ? settings['reportDueMinute'] as int : 0; // report due minute
 
-      // CONNECTION STATUS: Example rule — big latency becomes 'warning' even if HTTP 200.
-      if (pstatus == 'ok' && latency > 1500) connKeyForCompare = 'warning'; // mark connection as warning if latency high
+      if (pstatus == 'ok' && latency > 1500) connKeyForCompare = 'warning'; // mark connection warning on high latency
 
-      // VARIANCE CHECK: Compare current value to previous to flag abnormal jumps/drifts.
-      // For your API: pick a meaningful metric; avoid unit changes (e.g., ms→s) between reports.
-      final prevValue = prev.containsKey(name) ? (prev[name]['reportValue'] as num?)?.toDouble() : null; // previous numeric value if available
-      String finalRepKey = repKeyForCompare; // start with mapped report key
-      if (reportValue != null && prevValue != null) { // only compute variance if both current and previous available
-        final diff = (reportValue - prevValue).abs(); // absolute difference
-        final pct = prevValue == 0 ? (diff > 0 ? 100.0 : 0.0) : (diff / prevValue * 100.0); // percent change vs previous
-        if (pct >= variancePercent) finalRepKey = 'warning'; // flag as warning if percent change exceeds threshold
+      final prevValue =
+          prev.containsKey(name) ? (prev[name]['reportValue'] as num?)?.toDouble() : null; // previous numeric value
+      String finalRepKey = repKeyForCompare; // start final report key from mapped result
+      if (reportValue != null && prevValue != null) {
+        final diff = (reportValue - prevValue).abs(); // absolute difference between current and previous
+        final pct = prevValue == 0 ? (diff > 0 ? 100.0 : 0.0) : (diff / prevValue * 100.0); // percent change
+        if (pct >= variancePercent) finalRepKey = 'warning'; // flag warning if change >= threshold
       }
 
-      // DUE-TIME & LATE SUBMISSION:
-      // - We treat the current probe time as the "report timestamp".
-      // - If now is past the configured due time and no report in the last 30 minutes, mark 'error'.
-      // - If a report arrives after due time, we mark status OK/WARNING but log a 'LATE' event.
-      final dueToday = DateTime(nowTs.year, nowTs.month, nowTs.day, dueHour, dueMinute); // create today's due time
-      final dueWindowStart = dueToday.subtract(const Duration(minutes: 30)); // window start to consider "recent"
-      final repTs = nowTs; // use now as report timestamp for this probe
-      final hasRecentReport = repTs.isAfter(dueWindowStart); // whether the report is recent relative to the due window
+      final dueToday = DateTime(nowTs.year, nowTs.month, nowTs.day, dueHour, dueMinute); // today at due time
+      final dueWindowStart = dueToday.subtract(const Duration(minutes: 30)); // begin of recent window
+      final repTs = nowTs; // treat probe time as report time
+      final hasRecentReport = repTs.isAfter(dueWindowStart); // whether report is recent
 
       if (nowTs.isBefore(dueToday)) {
         // before due: ok/warning by variance (no action)
       } else {
         if (!hasRecentReport) {
-          finalRepKey = 'error'; // if past due and no recent report, mark error
+          finalRepKey = 'error'; // past due + no recent -> error
         } else {
           if (repTs.isAfter(dueToday)) {
             _dailyLog.insert(0, {
               'time': DateTime.now().toIso8601String(),
               'description': '$name late report submitted at ${repTs.toIso8601String()}',
               'status': 'LATE'
-            }); // log a late submission event in daily log
+            }); // if report after due -> log LATE
             if (_dailyLog.length > 2000) _dailyLog.removeRange(2000, _dailyLog.length); // cap daily log size
           }
         }
       }
 
-      _markProgressStart(name); // mark animation start for this source
+      _markProgressStart(name); // mark progress start for UI animation
 
       newSources.add({
-        'name': name, // source name
-        'connectionKey': connKeyForCompare, // final connection key to display
-        'reportKey': finalRepKey, // final report key to display
-        'connectionIcon': _iconForKey(connKeyForCompare), // icon derived from connection key
-        'reportIcon': _iconForKey(finalRepKey), // icon derived from report key
-        'connectionDetails': connDetails, // string shown in details dialog
-        'reportDetails': repDetails, // string shown in details dialog
-        'lastConnUpdated': nowTs.toIso8601String(), // timestamp for last connection update
-        'lastRepUpdated': nowTs.toIso8601String(), // timestamp for last report update
-        'isUpdatingConn': false, // UI flag for "updating" state
-        'isUpdatingRep': false, // UI flag for "updating" state
-        'staleMinutesConn': staleMinutesConn, // per-source connection stale threshold saved for UI
-        'staleMinutesRep': staleMinutesRep, // per-source report stale threshold saved for UI
-        'variancePercent': variancePercent, // per-source variance threshold saved for UI
-        'reportDueHour': dueHour, // due hour persisted to settings
-        'reportDueMinute': dueMinute, // due minute persisted to settings
-        'reportValue': reportValue, // numeric report value extracted (nullable)
+        'name': name,
+        'connectionKey': connKeyForCompare,
+        'reportKey': finalRepKey,
+        'connectionIcon': _iconForKey(connKeyForCompare),
+        'reportIcon': _iconForKey(finalRepKey),
+        'connectionDetails': connDetails,
+        'reportDetails': repDetails,
+        'lastConnUpdated': nowTs.toIso8601String(),
+        'lastRepUpdated': nowTs.toIso8601String(),
+        'isUpdatingConn': false,
+        'isUpdatingRep': false,
+        'staleMinutesConn': staleMinutesConn,
+        'staleMinutesRep': staleMinutesRep,
+        'variancePercent': variancePercent,
+        'reportDueHour': dueHour,
+        'reportDueMinute': dueMinute,
+        'reportValue': reportValue,
       });
     }
 
-    // --- Source D (USGS)
-    // BACKEND INTEGRATION GUIDE:
-    // - This block demonstrates consuming a JSON feed (GeoJSON) and extracting a single numeric metric ('mag').
-    // - For your Source D API, follow this pattern:
-    //   1) Probe your endpoint (consider headers/auth if needed).
-    //   2) Parse JSON; identify a stable numeric metric to represent the report (e.g., "count", "latencyMs", "cpuPct").
-    //   3) Map status:
-    //      - 'connectionKey': derived from HTTP success + latency rules.
-    //      - 'reportKey': 'ok' if metric present; 'warning' if partial/missing; 'error' if parsing failed.
-    //   4) Variance/due-time logic is shared and already applied below.
-    // - If your response is an array:
-    //   * Pick first or aggregate (avg/sum) — be consistent to avoid variance noise.
-    // - Make sure to:
-    //   * Convert metric to double.
-    //   * Set timestamps to support late logging.
-    //   * Keep units consistent (avoid mixing seconds/ms or % vs fractions).
+    // -----------------------
+    // Source D (USGS)
+    // Detailed one-line comments for each main step.
+    // -----------------------
     {
-      final name = 'Source D'; // declare source name for lookup and storage
-      final startIso = DateTime.now().subtract(const Duration(hours: 1)).toUtc().toIso8601String(); // compute start time for query parameter
-      final url = 'https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&limit=1&starttime=$startIso'; // build USGS query URL
-      // citation: https://earthquake.usgs.gov/fdsnws/event/1/
-      final probe = await _probeUrl(url, timeout: const Duration(seconds: 5)); // execute HTTP probe with timeout
-      final latency = probe['latencyMs'] as int? ?? 9999; // extract latency measured by probe
-      final pbody = probe['body'] as Map<String, dynamic>?; // probe JSON body mapped to Map if available
+      final name = 'Source D'; // set source name
+      final startIso = DateTime.now().subtract(const Duration(hours: 1)).toUtc().toIso8601String(); // start time param
+      final url =
+          'https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&limit=1&starttime=$startIso'; // build USGS query URL
+      // call the probe helper to GET the URL and measure latency/status
+      final probe = await _probeUrl(url, timeout: const Duration(seconds: 5));
+      final latency = probe['latencyMs'] as int? ?? 9999; // read latency from probe result
+      final pbody = probe['body'] as Map<String, dynamic>?; // parsed JSON body from the probe, or null
       final pstatus = probe['status'] as String; // normalized probe status string
 
-      // MAPPING: body → standardized conn/report + numeric value.
-      final mapped = _mapProbeToKeysAndValue(name, pbody, pstatus); // use mapping helper to extract keys/value
+      final mapped =
+          _mapProbeToKeysAndValue(name, pbody, pstatus); // map probe body/status into standardized keys + value
       String connKeyForCompare = mapped['connection'] ?? 'down'; // connection key fallback
       String repKeyForCompare = mapped['report'] ?? 'warning'; // report key fallback
-      final double? reportValue = mapped['value'] as double?; // numeric metric extracted, may be null
+      final double? reportValue = mapped['value'] as double?; // numeric metric (e.g., magnitude)
 
-      final nowTs = DateTime.now(); // timestamp for this probe
+      final nowTs = DateTime.now(); // store the current timestamp
       final connDetails = 'connection ${connKeyForCompare.toUpperCase()}: ${latency}ms to USGS'; // connection detail string
-      final repDetails = reportValue != null ? 'magnitude: ${reportValue.toStringAsFixed(2)}' : 'no events'; // report detail string
+      final repDetails =
+          reportValue != null ? 'magnitude: ${reportValue.toStringAsFixed(2)}' : 'no events'; // report detail string
 
-      // READ SETTINGS: thresholds that control staleness/variance/due-time behavior.
-      final settings = _sourceSettings[name]; // load per-source settings if present
-      final staleMinutesConn = settings != null && settings['staleMinutesConn'] is int ? settings['staleMinutesConn'] as int : DEFAULT_STALE_MINUTES_CONN; // conn stale threshold
-      final staleMinutesRep = settings != null && settings['staleMinutesRep'] is int ? settings['staleMinutesRep'] as int : DEFAULT_STALE_MINUTES_REP; // rep stale threshold
-      final variancePercent = settings != null && settings['variancePercent'] is num ? (settings['variancePercent'] as num).toDouble() : DEFAULT_VARIANCE_PERCENT; // variance threshold
+      final settings = _sourceSettings[name]; // per-source settings map
+      final staleMinutesConn = settings != null && settings['staleMinutesConn'] is int
+          ? settings['staleMinutesConn'] as int
+          : DEFAULT_STALE_MINUTES_CONN; // connection stale threshold
+      final staleMinutesRep = settings != null && settings['staleMinutesRep'] is int
+          ? settings['staleMinutesRep'] as int
+          : DEFAULT_STALE_MINUTES_REP; // report stale threshold
+      final variancePercent = settings != null && settings['variancePercent'] is num
+          ? (settings['variancePercent'] as num).toDouble()
+          : DEFAULT_VARIANCE_PERCENT; // variance percent threshold
       final dueHour = settings != null && settings['reportDueHour'] is int ? settings['reportDueHour'] as int : 0; // due hour
       final dueMinute = settings != null && settings['reportDueMinute'] is int ? settings['reportDueMinute'] as int : 0; // due minute
 
-      // CONNECTION RULE (example): if latency exceeds threshold, mark 'warning'.
-      if (pstatus == 'ok' && latency > 1500) connKeyForCompare = 'warning'; // escalate to warning if latency high
+      if (pstatus == 'ok' && latency > 1500) connKeyForCompare = 'warning'; // escalate to warning for high latency
 
-      // VARIANCE RULE: compare metric to previous reading to detect sudden changes.
-      final prevValue = prev.containsKey(name) ? (prev[name]['reportValue'] as num?)?.toDouble() : null; // previous metric value
-      String finalRepKey = repKeyForCompare; // start with mapped report key
-      if (reportValue != null && prevValue != null) { // only evaluate if both current and previous exist
-        final diff = (reportValue - prevValue).abs(); // absolute diff
+      final prevValue =
+          prev.containsKey(name) ? (prev[name]['reportValue'] as num?)?.toDouble() : null; // fetch previous value if exists
+      String finalRepKey = repKeyForCompare; // start final report key from mapped value
+      if (reportValue != null && prevValue != null) {
+        final diff = (reportValue - prevValue).abs(); // absolute difference
         final pct = prevValue == 0 ? (diff > 0 ? 100.0 : 0.0) : (diff / prevValue * 100.0); // percent change
-        if (pct >= variancePercent) finalRepKey = 'warning'; // set warning if percent change exceeds threshold
+        if (pct >= variancePercent) finalRepKey = 'warning'; // mark warning on large percent change
       }
 
-      // DUE-TIME & LATE SUBMISSION: identical behavior to Source C.
-      final dueToday = DateTime(nowTs.year, nowTs.month, nowTs.day, dueHour, dueMinute); // today's due datetime
+      final dueToday = DateTime(nowTs.year, nowTs.month, nowTs.day, dueHour, dueMinute); // build today's due time
       final dueWindowStart = dueToday.subtract(const Duration(minutes: 30)); // recent window start
-      final repTs = nowTs; // current probe timestamp
-      final hasRecentReport = repTs.isAfter(dueWindowStart); // whether report is recent enough
+      final repTs = nowTs; // use now as the report time for this probe
+      final hasRecentReport = repTs.isAfter(dueWindowStart); // check recency
 
       if (nowTs.isBefore(dueToday)) {
-        // before due: ok/warning
+        // before due -> nothing to change
       } else {
         if (!hasRecentReport) {
-          finalRepKey = 'error'; // mark error if past due and no recent report
+          finalRepKey = 'error'; // past due with no recent report -> error
         } else {
           if (repTs.isAfter(dueToday)) {
             _dailyLog.insert(0, {
               'time': DateTime.now().toIso8601String(),
               'description': '$name late report submitted at ${repTs.toIso8601String()}',
               'status': 'LATE'
-            }); // log LATE event
+            }); // log late submission
             if (_dailyLog.length > 2000) _dailyLog.removeRange(2000, _dailyLog.length); // cap size
           }
         }
       }
 
-      _markProgressStart(name); // animate progress for this source
+      _markProgressStart(name); // mark the recent update animation start
 
       newSources.add({
-        'name': name, // source identifier
-        'connectionKey': connKeyForCompare, // final connection status
-        'reportKey': finalRepKey, // final report status
-        'connectionIcon': _iconForKey(connKeyForCompare), // icon mapping for connection
-        'reportIcon': _iconForKey(finalRepKey), // icon mapping for report
-        'connectionDetails': connDetails, // human-readable connection details
-        'reportDetails': repDetails, // human-readable report details
-        'lastConnUpdated': nowTs.toIso8601String(), // last connection timestamp
-        'lastRepUpdated': nowTs.toIso8601String(), // last report timestamp
-        'isUpdatingConn': false, // UI flag
-        'isUpdatingRep': false, // UI flag
-        'staleMinutesConn': staleMinutesConn, // persisted conn stale threshold
-        'staleMinutesRep': staleMinutesRep, // persisted rep stale threshold
-        'variancePercent': variancePercent, // persisted variance threshold
-        'reportDueHour': dueHour, // persisted due hour
-        'reportDueMinute': dueMinute, // persisted due minute
-        'reportValue': reportValue, // numeric value extracted from API
+        'name': name,
+        'connectionKey': connKeyForCompare,
+        'reportKey': finalRepKey,
+        'connectionIcon': _iconForKey(connKeyForCompare),
+        'reportIcon': _iconForKey(finalRepKey),
+        'connectionDetails': connDetails,
+        'reportDetails': repDetails,
+        'lastConnUpdated': nowTs.toIso8601String(),
+        'lastRepUpdated': nowTs.toIso8601String(),
+        'isUpdatingConn': false,
+        'isUpdatingRep': false,
+        'staleMinutesConn': staleMinutesConn,
+        'staleMinutesRep': staleMinutesRep,
+        'variancePercent': variancePercent,
+        'reportDueHour': dueHour,
+        'reportDueMinute': dueMinute,
+        'reportValue': reportValue,
       });
     }
 
+    // assign built list to state variable
     sources = newSources;
   }
 
@@ -716,6 +727,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   // Utility helpers (icons, messages, progress)
   // -----------------------
 
+  // Randomly pick a connection key for mock sources.
   String _pickConnKey() {
     final r = _rng.nextDouble();
     if (r < 0.10) return 'down';
@@ -723,6 +735,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     return 'ok';
   }
 
+  // Randomly pick a report key for mock sources.
   String _pickRepKey() {
     final r = _rng.nextDouble();
     if (r < 0.10) return 'down';
@@ -730,6 +743,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     return 'ok';
   }
 
+  // Build a short human message for connection/report details.
   String _messageFor(String key, String kind, String name, DateTime ts) {
     switch (key) {
       case 'ok':
@@ -747,6 +761,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     }
   }
 
+  // Pick an icon for a status key.
   IconData _iconForKey(String k) {
     switch (k) {
       case 'ok':
@@ -764,6 +779,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     }
   }
 
+  // Pick a color for a status key.
   Color _colorForKey(String k) {
     switch (k) {
       case 'ok':
@@ -781,6 +797,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     }
   }
 
+  // Build a list of current error entries from the sources list.
   List<Map<String, String>> _currentErrorsFromSources() {
     final List<Map<String, String>> list = [];
     final now = DateTime.now().toIso8601String();
@@ -803,6 +820,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     return list;
   }
 
+  // Build a list of current log entries from the sources list.
   List<Map<String, String>> _currentLogFromSources() {
     final List<Map<String, String>> list = [];
     final now = DateTime.now().toIso8601String();
@@ -816,12 +834,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     return list;
   }
 
+  // Compute a progress value 0..1 that blends recent "update" animation and aging toward staleness.
   double _computeProgressToStale(String? lastIso, int staleMinutes, String name) {
-    // Progress should animate fill for PROGRESS_ANIMATION_SECONDS when an update occurs,
-    // and simultaneously indicate time elapsed toward staleness.
-    // We'll combine two components:
-    //  - recent update animation: uses _progressStart[name] to animate 0->1 over PROGRESS_ANIMATION_SECONDS
-    //  - aging progress: elapsed / (staleMinutes*60) clipped 0..1
     final now = DateTime.now();
     double animationPart = 0.0;
     if (_progressStart.containsKey(name)) {
@@ -838,16 +852,14 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         agingPart = (elapsed / cap).clamp(0.0, 1.0);
       }
     }
-    // Combine: show animation prominently for the initial period, then fall back to agingPart
     if (animationPart < 1.0) {
-      // during animation, blend: 70% animation + 30% aging
       return (0.7 * animationPart + 0.3 * agingPart).clamp(0.0, 1.0);
     } else {
-      // after animation finishes, show aging
       return agingPart;
     }
   }
 
+  // Format ISO string to HH:MM:SS for display.
   String _formatTime(String? iso) {
     if (iso == null) return 'never';
     final dt = DateTime.tryParse(iso);
@@ -859,20 +871,18 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   // UI: build, dialogs, settings
   // -----------------------
 
-  // Build a tappable title that:
-  // - loads assets/logo.png then assets/logo.jpg;
-  // - if an image loads, shows the image only (no extra text);
-  // - if no image found, shows left-aligned "DataWatch" text;
-  // - on phones (<=600dp) gives the title up to 50% of screen width;
-  // - on larger screens uses 1/8 width and also shows the label text to the right.
-  Widget _buildLogoTitleButton() {
+  // Build the tappable logo and brand capsule used in the AppBar.
+  Widget _buildLogoBrandButton() {
     final double screenWidth = MediaQuery.of(context).size.width;
     final bool isPhone = screenWidth <= 600.0;
-    final double widthFactor = isPhone ? 0.20 : 0.125;
-    final double maxWidth = screenWidth * widthFactor;
+
+    final double containerHeight = isPhone ? 32 : 48;
+    final double logoSize = isPhone ? 56 : 72;
+
+    final Color navBarColor = Theme.of(context).appBarTheme.backgroundColor ?? const Color(0xFF1E3A8A);
 
     return InkWell(
-      borderRadius: BorderRadius.circular(6),
+      borderRadius: BorderRadius.circular(8),
       onTap: () {
         Navigator.push(
           context,
@@ -880,25 +890,46 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         );
       },
       child: Container(
-        height: 44,
-        width: maxWidth,
+        margin: const EdgeInsets.only(left: 8),
+        height: containerHeight,
+        constraints: const BoxConstraints(maxWidth: 220),
         padding: const EdgeInsets.symmetric(horizontal: 8),
         decoration: BoxDecoration(
-          color: Colors.white, // ✅ white background behind the logo
-          borderRadius: BorderRadius.circular(6),
-        ),
-        child: Image.asset(
-          'assets/nav_logo.png',
-          fit: BoxFit.contain,
-          height: 40,
-          errorBuilder: (ctx, err, stack) => const Align(
-            alignment: Alignment.centerLeft,
-            child: Text(
-              'DataWatch',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.black),
-              overflow: TextOverflow.ellipsis,
-            ),
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: navBarColor,
+            width: 1,
           ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            SizedBox(
+              height: logoSize,
+              width: logoSize,
+              child: Image.asset(
+                'assets/nav_logo.png',
+                fit: BoxFit.contain,
+                errorBuilder: (ctx, err, stack) => const Icon(Icons.broken_image, size: 32),
+              ),
+            ),
+            if (!isPhone) ...[
+              const SizedBox(width: 6),
+              const Flexible(
+                child: Text(
+                  'Data Watch',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.black,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ],
         ),
       ),
     );
@@ -913,19 +944,16 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         centerTitle: false,     // left-align title (typical for large screens / Android)
         leadingWidth: 56,       // reserve standard space for a potential leading widget
         toolbarHeight: 56,      // consistent height for the AppBar
-        title: _buildLogoTitleButton(),
+        title: _buildLogoBrandButton(),
         backgroundColor: Colors.blue,
         actions: [
           // Responsive: show full actions on wide screens, collapse to a menu on narrow screens
           LayoutBuilder(
             builder: (context, constraints) {
               final double screenWidth = MediaQuery.of(context).size.width;
-              // Treat widths <= 600 as phone ranges; you can lower to 480 if preferred.
-              // S24 Ultra width in logical pixels typically <= 412 dp in portrait; 600 is safe.
               final bool isPhone = screenWidth <= 600.0;
 
               if (!isPhone && constraints.maxWidth > 700) {
-                // Desktop / wide tablet → full action row
                 return Row(children: [
                   TextButton(
                     onPressed: () {
@@ -968,7 +996,6 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                   ),
                 ]);
               } else {
-                // Phone or narrow width → collapsed popup menu
                 return PopupMenuButton<String>(
                   icon: const Icon(Icons.more_vert, color: Colors.white),
                   onSelected: (value) async {
@@ -1007,10 +1034,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       ),
       body: LayoutBuilder(
         builder: (context, constraints) {
-          // On wide screens (desktop), keep 1/8 empty space on both sides ⇒ content width = 3/4 of screen.
-          // On mobile, allow more width (e.g., 95%) for comfortable use.
           final bool isWide = constraints.maxWidth >= 800;
-          final double widthFactor = isWide ? 0.75 : 0.95; // 0.75 leaves 12.5% per side
+          final double widthFactor = isWide ? 0.75 : 0.95;
 
           return Center(
             child: FractionallySizedBox(
@@ -1052,12 +1077,63 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                               final lastRep = s['lastRepUpdated'] as String?;
                               final isUpdConn = s['isUpdatingConn'] as bool? ?? false;
                               final isUpdRep = s['isUpdatingRep'] as bool? ?? false;
-                              final staleMinutesConn = s['staleMinutesConn'] as int? ?? DEFAULT_STALE_MINUTES_CONN;
-                              final staleMinutesRep = s['staleMinutesRep'] as int? ?? DEFAULT_STALE_MINUTES_REP;
+                              final staleMinutesConn =
+                                  s['staleMinutesConn'] as int? ?? DEFAULT_STALE_MINUTES_CONN;
+                              final staleMinutesRep =
+                                  s['staleMinutesRep'] as int? ?? DEFAULT_STALE_MINUTES_REP;
 
                               final connProgress = _computeProgressToStale(lastConn, staleMinutesConn, name);
                               final repProgress = _computeProgressToStale(lastRep, staleMinutesRep, name);
 
+                              // compute three checks for this source (conn / db / data)
+                              final three = _computeThreeChecksForSource(s);
+                              final connThree = three['conn']!;
+                              final dbThree = three['db']!;
+                              final dataThree = three['data']!;
+
+                              double pickOpacity(String key) {
+                                if (key == 'ok' || key == 'warning' || key == 'stale') return 1.0;
+                                return 0.25;
+                              }
+
+                              // helper that builds three tiny bars that fit inside the button column width
+                              Widget _buildThreeBarsForButton(String a, String b, String c) {
+                                return Row(
+                                  children: [
+                                    Expanded(
+                                      child: Container(
+                                        height: 4,
+                                        decoration: BoxDecoration(
+                                          color: _colorForKey(a).withOpacity(pickOpacity(a)),
+                                          borderRadius: BorderRadius.circular(2),
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Expanded(
+                                      child: Container(
+                                        height: 4,
+                                        decoration: BoxDecoration(
+                                          color: _colorForKey(b).withOpacity(pickOpacity(b)),
+                                          borderRadius: BorderRadius.circular(2),
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Expanded(
+                                      child: Container(
+                                        height: 4,
+                                        decoration: BoxDecoration(
+                                          color: _colorForKey(c).withOpacity(pickOpacity(c)),
+                                          borderRadius: BorderRadius.circular(2),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                );
+                              }
+
+                              // Now render the row with name, connection column and report column.
                               return Column(children: [
                                 Row(children: [
                                   SizedBox(
@@ -1071,19 +1147,16 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                                       ),
                                     ]),
                                   ),
+
+                                  // Connection column (three mini-bars above the button)
                                   Expanded(
                                     child: Column(children: [
-                                      Row(children: [
-                                        Expanded(
-                                          child: LinearProgressIndicator(
-                                            value: connProgress,
-                                            color: _colorForKey(connKey),
-                                            backgroundColor: _colorForKey(connKey).withOpacity(0.2),
-                                            minHeight: 6,
-                                          ),
-                                        ),
-                                      ]),
-                                      const SizedBox(height: 6),
+                                      Padding(
+                                        padding: const EdgeInsets.only(bottom: 6.0),
+                                        child: _buildThreeBarsForButton(connThree, dbThree, dataThree),
+                                      ),
+                                      // Removed the LinearProgressIndicator here as requested.
+                                      const SizedBox(height: 6), // keep spacing where the progress bar was
                                       ElevatedButton(
                                         style: ElevatedButton.styleFrom(
                                           backgroundColor: Colors.white,
@@ -1092,32 +1165,37 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                                           padding: const EdgeInsets.symmetric(vertical: 10),
                                         ),
                                         onPressed: () {
-                                          _showDetailsDialog(context, '$name - Connection', connDetails, connKey, lastConn, isUpdConn);
+                                          final List<String> failing = [];
+                                          if (connThree != 'ok') failing.add('Connection: ${connThree.toUpperCase()}');
+                                          if (dbThree != 'ok') failing.add('DB read: ${dbThree.toUpperCase()}');
+                                          if (dataThree != 'ok') failing.add('Data quality: ${dataThree.toUpperCase()}');
+
+                                          final info = failing.isEmpty ? connDetails : failing.join('\n');
+
+                                          _showDetailsDialog(context, '$name - Connection', info, connKey, lastConn, isUpdConn);
                                         },
                                         child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
                                           Icon(connIcon, color: _colorForKey(connKey)),
                                           const SizedBox(width: 8),
-                                          Text(connKey.toUpperCase(), style: TextStyle(color: _colorForKey(connKey))),
+                                          Text(connKey.toUpperCase(), style: TextStyle(color: _colorForKey(connKey), fontSize: MediaQuery.of(context).size.width <= 600 ? 11 : 14)),
                                         ]),
                                       ),
                                       const SizedBox(height: 4),
                                       Text('${_formatTime(lastConn)} ${isUpdConn ? " • Updating..." : ""}', style: const TextStyle(fontSize: 12)),
                                     ]),
                                   ),
+
                                   const SizedBox(width: 8),
+
+                                  // Report column (three mini-bars above the button)
                                   Expanded(
                                     child: Column(children: [
-                                      Row(children: [
-                                        Expanded(
-                                          child: LinearProgressIndicator(
-                                            value: repProgress,
-                                            color: _colorForKey(repKey),
-                                            backgroundColor: _colorForKey(repKey).withOpacity(0.2),
-                                            minHeight: 6,
-                                          ),
-                                        ),
-                                      ]),
-                                      const SizedBox(height: 6),
+                                      Padding(
+                                        padding: const EdgeInsets.only(bottom: 6.0),
+                                        child: _buildThreeBarsForButton(connThree, dbThree, dataThree),
+                                      ),
+                                      // Removed the LinearProgressIndicator here as requested.
+                                      const SizedBox(height: 6), // keep spacing where the progress bar was
                                       ElevatedButton(
                                         style: ElevatedButton.styleFrom(
                                           backgroundColor: Colors.white,
@@ -1126,12 +1204,19 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                                           padding: const EdgeInsets.symmetric(vertical: 10),
                                         ),
                                         onPressed: () {
-                                          _showDetailsDialog(context, '$name - Report', repDetails, repKey, lastRep, isUpdRep);
+                                          final List<String> failing = [];
+                                          if (connThree != 'ok') failing.add('Connection: ${connThree.toUpperCase()}');
+                                          if (dbThree != 'ok') failing.add('DB read: ${dbThree.toUpperCase()}');
+                                          if (dataThree != 'ok') failing.add('Data quality: ${dataThree.toUpperCase()}');
+
+                                          final info = failing.isEmpty ? repDetails : failing.join('\n');
+
+                                          _showDetailsDialog(context, '$name - Report', info, repKey, lastRep, isUpdRep);
                                         },
                                         child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
                                           Icon(repIcon, color: _colorForKey(repKey)),
                                           const SizedBox(width: 8),
-                                          Text(repKey.toUpperCase(), style: TextStyle(color: _colorForKey(repKey))),
+                                          Text(repKey.toUpperCase(), style: TextStyle(color: _colorForKey(repKey), fontSize: MediaQuery.of(context).size.width <= 600 ? 11 : 14)),
                                         ]),
                                       ),
                                       const SizedBox(height: 4),
@@ -1157,6 +1242,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     );
   }
 
+  // Legend explaining colors and icons.
   Widget _buildLegend() {
     return Container(
       padding: const EdgeInsets.all(10),
@@ -1179,6 +1265,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     return Row(children: [Icon(icon, color: color), const SizedBox(width: 6), Text(label)]);
   }
 
+  // Show a details dialog for connection/report with status and last update.
   void _showDetailsDialog(BuildContext context, String title, String content, String key, String? lastIso, bool isUpdating) {
     showDialog(
       context: context,
@@ -1198,7 +1285,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     );
   }
 
-  // Per-source settings dialog with both slider and number input fields
+  // Per-source settings dialog: sliders + numeric input for thresholds and due time.
   void _openPerSourceSettings(BuildContext context, String sourceName) {
     final existing = _sourceSettings[sourceName];
     int staleMinutesConn = existing != null && existing['staleMinutesConn'] is int ? existing['staleMinutesConn'] as int : DEFAULT_STALE_MINUTES_CONN;
@@ -1210,7 +1297,6 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     String treatStaleAsRep = existing != null && existing['treatStaleAsRep'] is String ? existing['treatStaleAsRep'] as String : 'stale';
     String treatMissing = existing != null && existing['treatMissingReportWhenConnOk'] is String ? existing['treatMissingReportWhenConnOk'] as String : 'warning';
 
-    // Controllers for numeric text inputs
     final connTextCtrl = TextEditingController(text: staleMinutesConn.toString());
     final repTextCtrl = TextEditingController(text: staleMinutesRep.toString());
     final varTextCtrl = TextEditingController(text: variancePercent.toStringAsFixed(0));
@@ -1403,6 +1489,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     );
   }
 
+  // Global settings dialog for refresh interval.
   void _openGlobalSettings(BuildContext context) {
     int refreshSeconds = _refreshSeconds;
     final refreshCtrl = TextEditingController(text: refreshSeconds.toString());
@@ -1468,12 +1555,47 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       },
     );
   }
+
+  // Compute three simplified checks for the UI: connection, db, and data-quality.
+  Map<String, String> _computeThreeChecksForSource(Map<String, dynamic> s) {
+    final name = s['name'] as String;
+    final connKey = s['connectionKey'] as String? ?? 'down';
+    final repKey = s['reportKey'] as String? ?? 'warning';
+    final reportValue = s['reportValue'];
+
+    String connCheck = connKey;
+    String dbCheck = 'down';
+    String dataCheck = repKey;
+
+    if (name == 'Source A' || name == 'Source B') {
+      // For mock sources: simulate DB check from connection/report keys.
+      if (connCheck == 'down' || connCheck == 'error') {
+        dbCheck = connCheck;
+      } else {
+        dbCheck = (repKey == 'error') ? 'error' : (repKey == 'warning' ? 'warning' : 'ok');
+      }
+    } else {
+      // For Sources C/D use connection key as DB check placeholder.
+      // Backend: replace this with a separate DB/read probe if available.
+      dbCheck = connKey;
+    }
+
+    // Data quality check: if reportKey is ok but no numeric value, warn.
+    if (repKey == 'ok') {
+      dataCheck = (reportValue == null) ? 'warning' : 'ok';
+    } else {
+      dataCheck = repKey;
+    }
+
+    return {'conn': connCheck, 'db': dbCheck, 'data': dataCheck};
+  }
 }
 
 // -----------------------
 // Error and Log Pages
 // -----------------------
 
+// ErrorPage: shows current view and persisted history.
 class ErrorPage extends StatelessWidget {
   final List<Map<String, String>> entries;
   final List<Map<String, String>> persistedErrors;
@@ -1531,6 +1653,7 @@ class ErrorPage extends StatelessWidget {
   }
 }
 
+// LogPage: shows current and persisted logs.
 class LogPage extends StatelessWidget {
   final List<Map<String, String>> entries;
   final List<Map<String, String>> persistedLogs;
