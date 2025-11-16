@@ -1,0 +1,55 @@
+Instructions for login testing: 
+
+### 1. Install Dependencies
+```bash
+flutter pub get
+pip3 install flask flask-cors
+```
+
+### 2. Run Test Server
+```bash
+python3 test_server.py
+```
+
+### 3. Run Flutter App
+```bash
+flutter run
+```
+
+### 4. Login
+Use any of these test accounts:
+- `testuser` / `password123`
+- `admin` / `admin123`
+- `demo` / `demo`
+
+## Project Structure
+```
+datawatch/
+├── lib/
+│   ├── main.dart          # Login page
+│   ├── home_page.dart     # Dashboard
+│   └── about_page.dart    # Info page
+├── test_server.py         # Local test backend
+└── assets/
+    └── nav_logo.png       # App logo
+```
+
+## How It Works
+
+**Flutter App** → sends login request → **Flask Server** → checks credentials → returns success/fail
+
+The test server runs locally on your computer and simulates backend authentication without 
+needing a real database.
+
+## Troubleshooting
+
+**If Port already in use**
+- Change port in `test_server.py` from 5001 to 5002
+- Update port in `lib/main.dart` to match
+
+**Cant connect?**
+- Make sure test server is running
+- For Android Emulator: use `10.0.2.2:5001`
+- For iOS Simulator: use `localhost:5001`
+- For real device: use your computer's IP (e.g., `192.168.1.100:5001`)
+
