@@ -1,7 +1,26 @@
-// Full updated HomePage.dart
+// Full updated HomePage.dart (color-vision palettes improved; AppBar/nav uses palette 'nav')
+// -----------------------------------------------------------------------------
+// Section table
+// 1) Imports and persisted keys
+// 2) Defaults and external info
+// 3) HomePage widget + state lifecycle, init, dispose
+// 4) Persistence helpers (load/save/clear)
+// 5) Timer and refresh cycle
+// 6) HTTP probe helpers and mapping
+// 7) Data generation for sources (A,B mock; C Open‑Meteo; D USGS)
+// 8) Utility helpers (icons, messages, progress, formatting)
+// 9) UI: AppBar, source table, dialogs
+// 10) Settings dialogs (per-source + global) — global includes color-vision selector
+// 11) Compute helpers (three-checks)
+// 12) Error and Log pages
+// 13) Logout handling (added) — calls backend /logout then performs local logout
+// 14) Color vision / palette helpers (improved; includes 'nav' entry and safer error colors)
+// -----------------------------------------------------------------------------
+
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -16,17 +35,26 @@ const String PREFS_ERROR_LOG = 'errorLog';
 const String PREFS_DAILY_LOG = 'dailyLog';
 const String PREFS_REFRESH_INTERVAL = 'refreshIntervalSeconds';
 const String PREFS_SOURCE_SETTINGS = 'sourceSettings';
+const String PREFS_COLOR_MODE = 'colorVisionMode'; // persisted color-vision selection
 
-// Defaults and simple explanations
+// Defaults
 const int DEFAULT_REFRESH_SECONDS = 60; // default refresh every 60 seconds
 const int DEFAULT_STALE_MINUTES_CONN = 5; // connection considered stale after this many minutes
 const int DEFAULT_STALE_MINUTES_REP = 5; // report considered stale after this many minutes
 const double DEFAULT_VARIANCE_PERCENT = 10.0; // percent change threshold to mark a warning
 const int PROGRESS_ANIMATION_SECONDS = 10; // how long the "recent update" animation should run
 
-// External API info (for maintainers)
-// Open-Meteo: https://open-meteo.com/
-// USGS FDSN event query: https://earthquake.usgs.gov/fdsnws/event/1/
+// Color vision modes supported by the UI (persisted)
+enum ColorVisionMode {
+  Original,
+  Protanomaly,
+  Deuteranomaly,
+  Protanopia,
+  Deuteranopia,
+  Tritanomaly,
+  Tritanopia,
+  Achromatopsia,
+}
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -51,6 +79,15 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   // track per-source progress start times (used for the progress indicator)
   final Map<String, DateTime> _progressStart = {};
 
+  // Logout backend endpoint config used by _logout()
+  // Set to false for production deployments
+  static const bool _isTestMode = false;
+  String get _logoutEndpoint =>
+      _isTestMode ? 'http://127.0.0.1:5000/logout' : 'https://datawatchapp.com/logout';
+
+  // Color vision state (default Original). Persisted in prefs.
+  ColorVisionMode _colorMode = ColorVisionMode.Original;
+
   @override
   void initState() {
     super.initState();
@@ -65,7 +102,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
   // Initialize persisted state, generate initial data and start the periodic refresh timer.
   Future<void> _initEverything() async {
-    await _loadPersistedState(); // load prefs and logs
+    await _loadPersistedState(); // load prefs and logs (including color mode)
     await _generateMockData(); // generate initial set of source states
     await _evaluateAndPersistChanges(); // compare and persist snapshot/logs if changed
     _startTimer(); // start periodic refreshes
@@ -120,6 +157,16 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         _sourceSettings = {};
       }
     }
+
+    // load color mode (if saved)
+    final storedColorMode = prefs.getString(PREFS_COLOR_MODE);
+    if (storedColorMode != null) {
+      try {
+        _colorMode = ColorVisionMode.values.firstWhere((e) => e.toString() == storedColorMode);
+      } catch (_) {
+        _colorMode = ColorVisionMode.Original;
+      }
+    }
   }
 
   // Save logs to preferences.
@@ -137,10 +184,12 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   }
 
   // Save settings to preferences.
+  // Updated: also persist color-mode.
   Future<void> _saveSettingsPrefs() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(PREFS_REFRESH_INTERVAL, _refreshSeconds);
     await prefs.setString(PREFS_SOURCE_SETTINGS, jsonEncode(_sourceSettings));
+    await prefs.setString(PREFS_COLOR_MODE, _colorMode.toString());
   }
 
   // Clear all persisted data (snapshot, logs, settings).
@@ -151,10 +200,12 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     await prefs.remove(PREFS_DAILY_LOG);
     await prefs.remove(PREFS_REFRESH_INTERVAL);
     await prefs.remove(PREFS_SOURCE_SETTINGS);
+    await prefs.remove(PREFS_COLOR_MODE);
     oldSnapshot = null;
     _errorLog.clear();
     _dailyLog.clear();
     _sourceSettings.clear();
+    _colorMode = ColorVisionMode.Original;
     setState(() {});
   }
 
@@ -473,9 +524,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       if (prevValue != null) {
         final diff = (reportValue - prevValue).abs();
         final pct = prevValue == 0 ? (diff > 0 ? 100.0 : 0.0) : (diff / prevValue * 100.0);
-        if (pct >= variancePercent) {
-          finalRepKey = 'warning';
-        }
+        if (pct >= variancePercent) finalRepKey = 'warning';
       }
 
       final dueToday = DateTime(now.year, now.month, now.day, dueHour, dueMinute);
@@ -530,7 +579,6 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
     // -----------------------
     // Source C (Open-Meteo: weather)
-    // Detailed one-line comments for each main step so a junior dev can follow.
     // -----------------------
     {
       final name = 'Source C'; // define source name
@@ -574,7 +622,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
           prev.containsKey(name) ? (prev[name]['reportValue'] as num?)?.toDouble() : null; // previous numeric value
       String finalRepKey = repKeyForCompare; // start final report key from mapped result
       if (reportValue != null && prevValue != null) {
-        final diff = (reportValue - prevValue).abs(); // absolute difference between current and previous
+        final diff = (reportValue - prevValue).abs(); // absolute difference
         final pct = prevValue == 0 ? (diff > 0 ? 100.0 : 0.0) : (diff / prevValue * 100.0); // percent change
         if (pct >= variancePercent) finalRepKey = 'warning'; // flag warning if change >= threshold
       }
@@ -626,7 +674,6 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
     // -----------------------
     // Source D (USGS)
-    // Detailed one-line comments for each main step.
     // -----------------------
     {
       final name = 'Source D'; // set source name
@@ -647,8 +694,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
       final nowTs = DateTime.now(); // store the current timestamp
       final connDetails = 'connection ${connKeyForCompare.toUpperCase()}: ${latency}ms to USGS'; // connection detail string
-      final repDetails =
-          reportValue != null ? 'magnitude: ${reportValue.toStringAsFixed(2)}' : 'no events'; // report detail string
+      final repDetails = reportValue != null ? 'magnitude: ${reportValue.toStringAsFixed(2)}' : 'no events'; // report detail string
 
       final settings = _sourceSettings[name]; // per-source settings map
       final staleMinutesConn = settings != null && settings['staleMinutesConn'] is int
@@ -779,22 +825,11 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     }
   }
 
-  // Pick a color for a status key.
+  // Pick a color for a status key using the active color-vision palette.
   Color _colorForKey(String k) {
-    switch (k) {
-      case 'ok':
-        return Colors.green;
-      case 'error':
-        return Colors.red;
-      case 'warning':
-        return Colors.orange;
-      case 'stale':
-        return Colors.grey;
-      case 'down':
-        return Colors.purple;
-      default:
-        return Colors.black;
-    }
+    final palette = _paletteForMode(_colorMode); // get palette for current color mode
+    final hex = palette[k] ?? palette['ok']!; // fallback to ok color
+    return Color(int.parse(hex.replaceFirst('#', '0xff')));
   }
 
   // Build a list of current error entries from the sources list.
@@ -872,6 +907,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   // -----------------------
 
   // Build the tappable logo and brand capsule used in the AppBar.
+  // Logo is wrapped in a ColorFiltered widget that applies a filter appropriate to the selected color-vision mode.
   Widget _buildLogoBrandButton() {
     final double screenWidth = MediaQuery.of(context).size.width;
     final bool isPhone = screenWidth <= 600.0;
@@ -879,7 +915,9 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     final double containerHeight = isPhone ? 32 : 48;
     final double logoSize = isPhone ? 56 : 72;
 
-    final Color navBarColor = Theme.of(context).appBarTheme.backgroundColor ?? const Color(0xFF1E3A8A);
+    final palette = _paletteForMode(_colorMode);
+    final navBorderHex = palette['navBorder'] ?? '#000000';
+    final navBarBorderColor = Color(int.parse(navBorderHex.replaceFirst('#', '0xff')));
 
     return InkWell(
       borderRadius: BorderRadius.circular(8),
@@ -898,7 +936,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
           color: Colors.white,
           borderRadius: BorderRadius.circular(8),
           border: Border.all(
-            color: navBarColor,
+            color: navBarBorderColor,
             width: 1,
           ),
         ),
@@ -909,21 +947,24 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
             SizedBox(
               height: logoSize,
               width: logoSize,
-              child: Image.asset(
-                'assets/nav_logo.png',
-                fit: BoxFit.contain,
-                errorBuilder: (ctx, err, stack) => const Icon(Icons.broken_image, size: 32),
+              child: ColorFiltered(
+                colorFilter: _colorFilterForMode(_colorMode), // apply a color filter that adapts the logo colors for selected color vision mode
+                child: Image.asset(
+                  'assets/nav_logo.png',
+                  fit: BoxFit.contain,
+                  errorBuilder: (ctx, err, stack) => const Icon(Icons.broken_image, size: 32),
+                ),
               ),
             ),
             if (!isPhone) ...[
               const SizedBox(width: 6),
-              const Flexible(
+              Flexible(
                 child: Text(
                   'Data Watch',
                   style: TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.w600,
-                    color: Colors.black,
+                    color: Color(int.parse((palette['text'] ?? '#000000').replaceFirst('#', '0xff'))),
                   ),
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -937,15 +978,19 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
+    final palette = _paletteForMode(_colorMode);
+    final navHex = palette['nav'] ?? '#1976d2'; // fallback blue
+    final navColor = Color(int.parse(navHex.replaceFirst('#', '0xff')));
+
     return Scaffold(
       appBar: AppBar(
         // Ensure title has predictable spacing and doesn't get auto-centered/trimmed.
-        titleSpacing: 0,        // allow title to start near the left edge
-        centerTitle: false,     // left-align title (typical for large screens / Android)
-        leadingWidth: 56,       // reserve standard space for a potential leading widget
-        toolbarHeight: 56,      // consistent height for the AppBar
+        titleSpacing: 0, // allow title to start near the left edge
+        centerTitle: false, // left-align title (typical for large screens / Android)
+        leadingWidth: 56, // reserve standard space for a potential leading widget
+        toolbarHeight: 56, // consistent height for the AppBar
         title: _buildLogoBrandButton(),
-        backgroundColor: Colors.blue,
+        backgroundColor: navColor, // use palette nav color for AppBar background
         actions: [
           // Responsive: show full actions on wide screens, collapse to a menu on narrow screens
           LayoutBuilder(
@@ -960,17 +1005,17 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                       final errors = _currentErrorsFromSources();
                       Navigator.push(context, MaterialPageRoute(builder: (_) => ErrorPage(entries: errors, persistedErrors: _errorLog)));
                     },
-                    child: const Text('Errors', style: TextStyle(color: Colors.white)),
+                    child: Text('Errors', style: TextStyle(color: Color(int.parse((palette['text'] ?? '#ffffff').replaceFirst('#', '0xff'))))),
                   ),
                   TextButton(
                     onPressed: () {
                       final logs = _currentLogFromSources();
                       Navigator.push(context, MaterialPageRoute(builder: (_) => LogPage(entries: logs, persistedLogs: _dailyLog)));
                     },
-                    child: const Text('Log', style: TextStyle(color: Colors.white)),
+                    child: Text('Log', style: TextStyle(color: Color(int.parse((palette['text'] ?? '#ffffff').replaceFirst('#', '0xff'))))),
                   ),
                   IconButton(
-                    icon: const Icon(Icons.settings, color: Colors.white),
+                    icon: Icon(Icons.settings, color: Color(int.parse((palette['text'] ?? '#ffffff').replaceFirst('#', '0xff')))),
                     tooltip: 'Settings',
                     onPressed: () => _openGlobalSettings(context),
                   ),
@@ -978,26 +1023,18 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                     onPressed: () async {
                       await _clearPersistedAll();
                     },
-                    icon: const Icon(Icons.delete_sweep, color: Colors.white),
+                    icon: Icon(Icons.delete_sweep, color: Color(int.parse((palette['text'] ?? '#ffffff').replaceFirst('#', '0xff')))),
                     tooltip: 'Clear persisted snapshot and logs',
                   ),
                   IconButton(
-                    onPressed: () async {
-                      final prefs = await SharedPreferences.getInstance();
-                      await prefs.setBool('loggedIn', false);
-                      Navigator.pushAndRemoveUntil(
-                        context,
-                        MaterialPageRoute(builder: (context) => const LoginPage()),
-                        (Route<dynamic> route) => false,
-                      );
-                    },
-                    icon: const Icon(Icons.logout, color: Colors.white),
+                    onPressed: _logout, // now calls centralized logout handler (calls backend then local logout)
+                    icon: Icon(Icons.logout, color: Color(int.parse((palette['text'] ?? '#ffffff').replaceFirst('#', '0xff')))),
                     tooltip: 'Logout',
                   ),
                 ]);
               } else {
                 return PopupMenuButton<String>(
-                  icon: const Icon(Icons.more_vert, color: Colors.white),
+                  icon: Icon(Icons.more_vert, color: Color(int.parse((palette['text'] ?? '#ffffff').replaceFirst('#', '0xff')))),
                   onSelected: (value) async {
                     if (value == 'Errors') {
                       final errors = _currentErrorsFromSources();
@@ -1010,13 +1047,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                     } else if (value == 'Clear') {
                       await _clearPersistedAll();
                     } else if (value == 'Logout') {
-                      final prefs = await SharedPreferences.getInstance();
-                      await prefs.setBool('loggedIn', false);
-                      Navigator.pushAndRemoveUntil(
-                        context,
-                        MaterialPageRoute(builder: (context) => const LoginPage()),
-                        (Route<dynamic> route) => false,
-                      );
+                      await _logout(); // centralized logout call
                     }
                   },
                   itemBuilder: (context) => const [
@@ -1043,21 +1074,21 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
               child: Padding(
                 padding: const EdgeInsets.all(16),
                 child: Column(children: [
-                  const Text('Data Source Status', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+                  Text('Data Source Status', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(int.parse((palette['text'] ?? '#000000').replaceFirst('#', '0xff'))))),
                   const SizedBox(height: 12),
                   Expanded(
                     child: Container(
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        border: Border.all(color: Colors.black, width: 1.2),
+                        border: Border.all(color: Color(int.parse((palette['navBorder'] ?? '#000000').replaceFirst('#', '0xff'))), width: 1.2),
                         borderRadius: BorderRadius.circular(8),
-                        color: Colors.white,
+                        color: Color(int.parse((palette['bg'] ?? '#ffffff').replaceFirst('#', '0xff'))),
                       ),
                       child: Column(children: [
-                        Row(children: const [
-                          SizedBox(width: 140, child: Text('', style: TextStyle(fontWeight: FontWeight.bold))),
-                          Expanded(child: Center(child: Text('Connection', style: TextStyle(fontWeight: FontWeight.bold)))),
-                          Expanded(child: Center(child: Text('Report', style: TextStyle(fontWeight: FontWeight.bold)))),
+                        Row(children: [
+                          SizedBox(width: 140, child: Text('', style: TextStyle(fontWeight: FontWeight.bold, color: Color(int.parse((palette['text'] ?? '#000000').replaceFirst('#', '0xff')))))),
+                          Expanded(child: Center(child: Text('Connection', style: TextStyle(fontWeight: FontWeight.bold, color: Color(int.parse((palette['text'] ?? '#000000').replaceFirst('#', '0xff'))))))),
+                          Expanded(child: Center(child: Text('Report', style: TextStyle(fontWeight: FontWeight.bold, color: Color(int.parse((palette['text'] ?? '#000000').replaceFirst('#', '0xff'))))))),
                         ]),
                         const Divider(color: Colors.black),
                         Expanded(
@@ -1139,9 +1170,9 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                                   SizedBox(
                                     width: 140,
                                     child: Row(children: [
-                                      Expanded(child: Text(name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16))),
+                                      Expanded(child: Text(name, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(int.parse((palette['text'] ?? '#000000').replaceFirst('#', '0xff')))))),
                                       IconButton(
-                                        icon: const Icon(Icons.settings, size: 18),
+                                        icon: Icon(Icons.settings, size: 18, color: Color(int.parse((palette['text'] ?? '#000000').replaceFirst('#', '0xff')))),
                                         tooltip: 'Source settings',
                                         onPressed: () => _openPerSourceSettings(context, name),
                                       ),
@@ -1155,13 +1186,12 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                                         padding: const EdgeInsets.only(bottom: 6.0),
                                         child: _buildThreeBarsForButton(connThree, dbThree, dataThree),
                                       ),
-                                      // Removed the LinearProgressIndicator here as requested.
                                       const SizedBox(height: 6), // keep spacing where the progress bar was
                                       ElevatedButton(
                                         style: ElevatedButton.styleFrom(
-                                          backgroundColor: Colors.white,
-                                          foregroundColor: Colors.black,
-                                          side: const BorderSide(color: Colors.black45),
+                                          backgroundColor: Color(int.parse((palette['bgButton'] ?? '#ffffff').replaceFirst('#', '0xff'))),
+                                          foregroundColor: Color(int.parse((palette['text'] ?? '#000000').replaceFirst('#', '0xff'))),
+                                          side: BorderSide(color: Color(int.parse((palette['buttonBorder'] ?? '#000000').replaceFirst('#', '0xff')))),
                                           padding: const EdgeInsets.symmetric(vertical: 10),
                                         ),
                                         onPressed: () {
@@ -1181,7 +1211,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                                         ]),
                                       ),
                                       const SizedBox(height: 4),
-                                      Text('${_formatTime(lastConn)} ${isUpdConn ? " • Updating..." : ""}', style: const TextStyle(fontSize: 12)),
+                                      Text('${_formatTime(lastConn)} ${isUpdConn ? " • Updating..." : ""}', style: TextStyle(fontSize: 12, color: Color(int.parse((palette['text'] ?? '#000000').replaceFirst('#', '0xff'))))),
                                     ]),
                                   ),
 
@@ -1194,13 +1224,12 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                                         padding: const EdgeInsets.only(bottom: 6.0),
                                         child: _buildThreeBarsForButton(connThree, dbThree, dataThree),
                                       ),
-                                      // Removed the LinearProgressIndicator here as requested.
                                       const SizedBox(height: 6), // keep spacing where the progress bar was
                                       ElevatedButton(
                                         style: ElevatedButton.styleFrom(
-                                          backgroundColor: Colors.white,
-                                          foregroundColor: Colors.black,
-                                          side: const BorderSide(color: Colors.black45),
+                                          backgroundColor: Color(int.parse((palette['bgButton'] ?? '#ffffff').replaceFirst('#', '0xff'))),
+                                          foregroundColor: Color(int.parse((palette['text'] ?? '#000000').replaceFirst('#', '0xff'))),
+                                          side: BorderSide(color: Color(int.parse((palette['buttonBorder'] ?? '#000000').replaceFirst('#', '0xff')))),
                                           padding: const EdgeInsets.symmetric(vertical: 10),
                                         ),
                                         onPressed: () {
@@ -1220,7 +1249,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                                         ]),
                                       ),
                                       const SizedBox(height: 4),
-                                      Text('${_formatTime(lastRep)} ${isUpdRep ? " • Updating..." : ""}', style: const TextStyle(fontSize: 12)),
+                                      Text('${_formatTime(lastRep)} ${isUpdRep ? " • Updating..." : ""}', style: TextStyle(fontSize: 12, color: Color(int.parse((palette['text'] ?? '#000000').replaceFirst('#', '0xff'))))),
                                     ]),
                                   ),
                                 ]),
@@ -1244,19 +1273,20 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
   // Legend explaining colors and icons.
   Widget _buildLegend() {
+    final palette = _paletteForMode(_colorMode);
     return Container(
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        border: Border.all(color: Colors.black, width: 1.2),
+        border: Border.all(color: Color(int.parse((palette['navBorder'] ?? '#000000').replaceFirst('#', '0xff'))), width: 1.2),
         borderRadius: BorderRadius.circular(8),
-        color: Colors.white,
+        color: Color(int.parse((palette['bg'] ?? '#ffffff').replaceFirst('#', '0xff'))),
       ),
       child: Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
-        _legendItem(Icons.check, 'OK', Colors.green),
-        _legendItem(Icons.more_horiz, 'Stale', Colors.grey),
-        _legendItem(Icons.cloud_off, 'Down', Colors.purple),
-        _legendItem(Icons.warning, 'Warning', Colors.orange),
-        _legendItem(Icons.close, 'Error', Colors.red),
+        _legendItem(Icons.check, 'OK', _colorForKey('ok')),
+        _legendItem(Icons.more_horiz, 'Stale', _colorForKey('stale')),
+        _legendItem(Icons.cloud_off, 'Down', _colorForKey('down')),
+        _legendItem(Icons.warning, 'Warning', _colorForKey('warning')),
+        _legendItem(Icons.close, 'Error', _colorForKey('error')),
       ]),
     );
   }
@@ -1284,6 +1314,10 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       ),
     );
   }
+
+  // -----------------------
+  // Settings dialogs (global + per source)
+  // -----------------------
 
   // Per-source settings dialog: sliders + numeric input for thresholds and due time.
   void _openPerSourceSettings(BuildContext context, String sourceName) {
@@ -1489,10 +1523,12 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     );
   }
 
-  // Global settings dialog for refresh interval.
+  // Global settings dialog for refresh interval and color-vision selector.
   void _openGlobalSettings(BuildContext context) {
     int refreshSeconds = _refreshSeconds;
     final refreshCtrl = TextEditingController(text: refreshSeconds.toString());
+
+    ColorVisionMode selectedMode = _colorMode; // local copy for dialog
 
     void _parseRefresh() {
       final r = int.tryParse(refreshCtrl.text);
@@ -1538,12 +1574,37 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                   ),
                 ),
               ]),
+              const SizedBox(height: 12),
+              // Color-vision selector: changes the UI palette and logo filter
+              Align(alignment: Alignment.centerLeft, child: const Text('Color Vision Mode', style: TextStyle(fontWeight: FontWeight.bold))),
+              const SizedBox(height: 6),
+              DropdownButton<ColorVisionMode>(
+                value: selectedMode,
+                isExpanded: true,
+                items: ColorVisionMode.values
+                    .map((m) => DropdownMenuItem(value: m, child: Text(m.toString().split('.').last)))
+                    .toList(),
+                onChanged: (v) {
+                  setD(() {
+                    selectedMode = v ?? ColorVisionMode.Original;
+                    // update a preview: setState on outer to preview immediately
+                    _colorMode = selectedMode;
+                    _saveSettingsPrefs(); // persist selection as preview is immediate
+                  });
+                },
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Select a color-vision mode to adapt the UI palette and logo so users with color deficiencies can better distinguish statuses.',
+                style: TextStyle(fontSize: 12),
+              ),
             ]),
             actions: [
               TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel')),
               TextButton(onPressed: () async {
                 _parseRefresh();
                 _refreshSeconds = refreshSeconds;
+                _colorMode = selectedMode;
                 await _saveSettingsPrefs();
                 _startTimer();
                 Navigator.of(ctx).pop();
@@ -1556,7 +1617,9 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     );
   }
 
+  // -----------------------
   // Compute three simplified checks for the UI: connection, db, and data-quality.
+  // -----------------------
   Map<String, String> _computeThreeChecksForSource(Map<String, dynamic> s) {
     final name = s['name'] as String;
     final connKey = s['connectionKey'] as String? ?? 'down';
@@ -1707,4 +1770,216 @@ class LogPage extends StatelessWidget {
       ),
     );
   }
+}
+
+// -----------------------
+// Logout handling (added)
+// -----------------------
+
+// Centralized logout: try backend /logout then always perform local logout/navigation.
+// This keeps app behaviour consistent and avoids duplicated inline logout logic.
+extension on _HomePageState {
+  Future<void> _logout() async {
+    try {
+      // Attempt to notify backend; failures/timeouts are ignored and local logout proceeds.
+      await http.get(Uri.parse(_logoutEndpoint), headers: {'Accept': 'application/json'}).timeout(const Duration(seconds: 6));
+    } catch (_) {
+      // swallow network errors/timeouts
+    } finally {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('loggedIn', false);
+      if (!mounted) return;
+      Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(builder: (context) => const LoginPage()),
+        (Route<dynamic> route) => false,
+      );
+    }
+  }
+}
+
+// -----------------------
+// Color vision / palette helpers (improved)
+// -----------------------
+
+// Returns a palette mapping status keys to hex colors for a given color-vision mode.
+// Palettes include 'nav' (AppBar), 'navBorder', 'bg', 'text', 'bgButton', 'buttonBorder', plus status colors.
+Map<String, String> _paletteForMode(ColorVisionMode mode) {
+  // Each palette defines: ok, warning, error, stale, down, nav, navBorder, bg, text, bgButton, buttonBorder
+  // Colors chosen to be more distinguishable per accessible palettes and common recommendations.
+  switch (mode) {
+    case ColorVisionMode.Protanopia:
+      return {
+        'ok': '#2b83ba', // blue
+        'warning': '#fdae61', // orange
+        'error': '#000000', // choose black/dark for critical (safer)
+        'stale': '#9e9e9e',
+        'down': '#5e4fa2', // purple
+        'nav': '#1f78b4',
+        'navBorder': '#174e74',
+        'bg': '#ffffff',
+        'text': '#0b1720',
+        'bgButton': '#ffffff',
+        'buttonBorder': '#cfd8dc',
+      };
+    case ColorVisionMode.Deuteranopia:
+      return {
+        'ok': '#377eb8', // blue
+        'warning': '#ff7f00', // orange
+        'error': '#000000', // black for clarity
+        'stale': '#9e9e9e',
+        'down': '#984ea3', // purple
+        'nav': '#256aa8',
+        'navBorder': '#1f527f',
+        'bg': '#ffffff',
+        'text': '#07121a',
+        'bgButton': '#ffffff',
+        'buttonBorder': '#cfd8dc',
+      };
+    case ColorVisionMode.Tritanopia:
+      return {
+        'ok': '#0072b2', // deep blue
+        'warning': '#fdc086', // tan/orange
+        'error': '#000000', // black for clarity
+        'stale': '#9e9e9e',
+        'down': '#7f7f7f',
+        'nav': '#0b5f8a',
+        'navBorder': '#083e57',
+        'bg': '#ffffff',
+        'text': '#07121a',
+        'bgButton': '#ffffff',
+        'buttonBorder': '#cfd8dc',
+      };
+    case ColorVisionMode.Protanomaly:
+      return {
+        'ok': '#2f78b4', // slightly desaturated blue
+        'warning': '#f6a254', // orange
+        'error': '#6f1f1f', // dark maroon vs bright red for contrast
+        'stale': '#9e9e9e',
+        'down': '#6a52a3',
+        'nav': '#2a5e92',
+        'navBorder': '#1f425f',
+        'bg': '#ffffff',
+        'text': '#0b1720',
+        'bgButton': '#ffffff',
+        'buttonBorder': '#cfd8dc',
+      };
+    case ColorVisionMode.Deuteranomaly:
+      return {
+        'ok': '#2f78b4',
+        'warning': '#f6a254',
+        'error': '#5a1d1d', // darker for visibility
+        'stale': '#9e9e9e',
+        'down': '#6a52a3',
+        'nav': '#2a5e92',
+        'navBorder': '#1f425f',
+        'bg': '#ffffff',
+        'text': '#0b1720',
+        'bgButton': '#ffffff',
+        'buttonBorder': '#cfd8dc',
+      };
+    case ColorVisionMode.Tritanomaly:
+      return {
+        'ok': '#2b7fb8',
+        'warning': '#f7c77c',
+        'error': '#5b2727',
+        'stale': '#9e9e9e',
+        'down': '#6b6b6b',
+        'nav': '#25678f',
+        'navBorder': '#183f57',
+        'bg': '#ffffff',
+        'text': '#07121a',
+        'bgButton': '#ffffff',
+        'buttonBorder': '#cfd8dc',
+      };
+    case ColorVisionMode.Achromatopsia:
+      // Greyscale palette for complete color blindness
+      return {
+        'ok': '#4f4f4f',
+        'warning': '#8a8a8a',
+        'error': '#1f1f1f',
+        'stale': '#bdbdbd',
+        'down': '#6b6b6b',
+        'nav': '#2f2f2f',
+        'navBorder': '#1f1f1f',
+        'bg': '#ffffff',
+        'text': '#000000',
+        'bgButton': '#ffffff',
+        'buttonBorder': '#cfcfcf',
+      };
+    case ColorVisionMode.Original:
+    default:
+      // Original/default palette used previously
+      return {
+        'ok': '#2e7d32', // green
+        'warning': '#ff9800', // orange
+        'error': '#d32f2f', // red
+        'stale': '#9e9e9e', // grey
+        'down': '#6a1b9a', // purple
+        'nav': '#1976d2', // original blue
+        'navBorder': '#145ea8',
+        'bg': '#ffffff',
+        'text': '#000000',
+        'bgButton': '#ffffff',
+        'buttonBorder': '#cfd8dc',
+      };
+  }
+}
+
+// Build a ColorFilter matrix for the given ColorVisionMode suitable for ColorFiltered.
+ColorFilter _colorFilterForMode(ColorVisionMode mode) {
+  // Identity (no change)
+  const identity = <double>[
+    1, 0, 0, 0, 0, //
+    0, 1, 0, 0, 0, //
+    0, 0, 1, 0, 0, //
+    0, 0, 0, 1, 0, //
+  ];
+
+  // Boost blue / reduce red to help protan/deutan users differentiate
+  const blueBoost = <double>[
+    0.7, 0.1, 0.2, 0, 0, //
+    0.1, 0.8, 0.1, 0, 0, //
+    0.05, 0.05, 0.9, 0, 0, //
+    0, 0, 0, 1, 0, //
+  ];
+
+  // Mild desaturate and contrast (for anomalous types)
+  const desaturate = <double>[
+    0.6, 0.25, 0.15, 0, 0, //
+    0.2, 0.6, 0.2, 0, 0, //
+    0.15, 0.25, 0.6, 0, 0, //
+    0, 0, 0, 1, 0, //
+  ];
+
+  // Greyscale matrix for achromatopsia
+  const greyscale = <double>[
+    0.2126, 0.7152, 0.0722, 0, 0, //
+    0.2126, 0.7152, 0.0722, 0, 0, //
+    0.2126, 0.7152, 0.0722, 0, 0, //
+    0, 0, 0, 1, 0, //
+  ];
+
+  switch (mode) {
+    case ColorVisionMode.Protanopia:
+    case ColorVisionMode.Deuteranopia:
+      return const ColorFilter.matrix(blueBoost);
+    case ColorVisionMode.Protanomaly:
+    case ColorVisionMode.Deuteranomaly:
+    case ColorVisionMode.Tritanomaly:
+      return const ColorFilter.matrix(desaturate);
+    case ColorVisionMode.Tritanopia:
+      return const ColorFilter.matrix(blueBoost);
+    case ColorVisionMode.Achromatopsia:
+      return const ColorFilter.matrix(greyscale);
+    case ColorVisionMode.Original:
+    default:
+      return const ColorFilter.matrix(identity);
+  }
+}
+
+// Helper: convert hex string like "#rrggbb" to Color
+Color _hexToColor(String hex) {
+  final cleaned = hex.replaceFirst('#', '');
+  return Color(int.parse('ff$cleaned', radix: 16));
 }
