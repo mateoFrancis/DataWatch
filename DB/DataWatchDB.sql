@@ -23,8 +23,10 @@ CREATE TABLE `data_sources` (
   `name` varchar(255),
   `type` varchar(255),
   `base_url` varchar(255),
+  `api_key` varchar(255), 
   `created_at` datetime
 );
+
 
 CREATE TABLE `api_calls` (
   `call_id` int PRIMARY KEY AUTO_INCREMENT,
@@ -40,7 +42,8 @@ CREATE TABLE `locations` (
   `city` varchar(255),
   `country` varchar(255),
   `lat` float,
-  `lon` float
+  `lon` float,
+  `zip_code` varchar(20)
 );
 
 CREATE TABLE `weather_data` (

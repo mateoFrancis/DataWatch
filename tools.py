@@ -54,13 +54,13 @@ def add_user(username, email, password_hash):
     print(f"\n[add_user] Added user: {username} at {created_at}")
 
 
-def add_data_source(name, type_, base_url):
+def add_data_source(name, type_, base_url, api_key):
     
     conn = get_connection()
     
     try:
         cur = conn.cursor()
-        cur.callproc("add_data_source", (name, type_, base_url))
+        cur.callproc("add_data_source", (name, type_, base_url, api_key))
         conn.commit()
     
     finally:
@@ -315,7 +315,7 @@ if __name__ == "__main__":
     add_location("Los Angeles", "USA", 34.0239, -118.172, "90210")
 
     # add api source
-    add_data_source("OpenWeather", "weather", "https://api.openweathermap.org/data/2.5/weather")
+    add_data_source("OpenWeather", "weather", "https://api.openweathermap.org/data/2.5/weather", "apikey_1234")
 
     # log api call and temporarily store latest call id for later usage
     call_id = log_api_call(1, 1, "weather", "pending") 
