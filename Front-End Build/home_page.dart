@@ -83,7 +83,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   // Set to false for production deployments
   static const bool _isTestMode = false;
   String get _logoutEndpoint =>
-      _isTestMode ? 'http://127.0.0.1:5000/logout' : 'https://datawatchapp.com/logout';
+      _isTestMode ? 'http://127.0.0.1:5000/logout' : 'https://datawatchapp.com/api/logout';
 
   // Color vision state (default Original). Persisted in prefs.
   ColorVisionMode _colorMode = ColorVisionMode.Original;
