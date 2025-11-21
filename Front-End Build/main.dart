@@ -89,9 +89,9 @@ class _LoginPageState extends State<LoginPage> {
   // Configure endpoints for test vs production
   static const bool _isTestMode = false; // set false for production builds
   String get _loginEndpoint =>
-      _isTestMode ? 'http://127.0.0.1:5000/login' : 'https://datawatchapp.com/login';
+      _isTestMode ? 'http://127.0.0.1:5000/login' : 'https://datawatchapp.com/api/login';
   String get _registerEndpoint =>
-      _isTestMode ? 'http://127.0.0.1:5000/register' : 'https://datawatchapp.com/register';
+      _isTestMode ? 'http://127.0.0.1:5000/register' : 'https://datawatchapp.com/api/register';
 
   // Try to authenticate with Flask server
   Future<Map<String, dynamic>> _authenticateWithServer(
