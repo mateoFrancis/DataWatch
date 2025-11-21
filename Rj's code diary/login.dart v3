@@ -110,18 +110,18 @@ class _LoginPageState extends State<LoginPage> {
   // Send POST request to Flask server for login authentication
   Future<Map<String, dynamic>> _authenticateWithServer(String username, String password) async {
     // TESTING: Use localhost for development
-    // PRODUCTION: Change to 'https://datawatchapp.com/login'
+    // PRODUCTION: Change to 'https://datawatchapp.com/api/login'
     
     // For Android Emulator: use 10.0.2.2 instead of localhost
     // For iOS Simulator: use localhost
     // For Real Device: use your computer's IP (e.g., '192.168.1.100')
-    const bool isTestMode = true; // SET TO FALSE FOR PRODUCTION
+    const bool isTestMode = false; // SET TO FALSE FOR PRODUCTION
     
     final String endpoint = isTestMode 
         ? 'http://10.0.2.2:5001/login'  // Android emulator
         // ? 'http://localhost:5000/login'  // iOS simulator
         // ? 'http://192.168.1.XXX:5000/login'  // Real device (replace XXX)
-        : 'https://datawatchapp.com/login';
+        : 'https://datawatchapp.com/api/login';
     
     final url = Uri.parse(endpoint);
     

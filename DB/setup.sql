@@ -8,6 +8,6 @@ Show procedure status where Db = 'datawatch';
 
 Show tables;
 
-\! php ./public_html/Project_Jarf/tools.php
+--\! python3 /srv/shared/DataWatch/setup.py
 
 SET foreign_key_checks = 1;

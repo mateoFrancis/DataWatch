@@ -23,12 +23,14 @@ DROP PROCEDURE IF EXISTS add_data_source;
 CREATE PROCEDURE add_data_source (
     IN p_name VARCHAR(255),
     IN p_type VARCHAR(255),
-    IN p_base_url VARCHAR(255)
+    IN p_base_url VARCHAR(255),
+    IN p_api_key VARCHAR(255) 
 )
 BEGIN
-    INSERT INTO data_sources (name, type, base_url, created_at)
-    VALUES (p_name, p_type, p_base_url, NOW());
+    INSERT INTO data_sources (name, type, base_url, api_key, created_at)
+    VALUES (p_name, p_type, p_base_url, p_api_key, NOW());
 END //
+
 
 
 -- Add Location --
@@ -38,11 +40,12 @@ CREATE PROCEDURE add_location (
     IN p_city VARCHAR(255),
     IN p_country VARCHAR(255),
     IN p_lat FLOAT,
-    IN p_lon FLOAT
+    IN p_lon FLOAT,
+    IN p_zip_code VARCHAR(20)
 )
 BEGIN
-    INSERT INTO locations (city, country, lat, lon)
-    VALUES (p_city, p_country, p_lat, p_lon);
+    INSERT INTO locations (city, country, lat, lon, zip_code)
+    VALUES (p_city, p_country, p_lat, p_lon, p_zip_code);
 END //
 
 
