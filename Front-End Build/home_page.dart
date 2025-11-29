@@ -1,50 +1,97 @@
-// Full updated HomePage.dart (color-vision palettes improved; AppBar/nav uses palette 'nav')
+// HomePage.dart
 // -----------------------------------------------------------------------------
-// Section table
-// 1) Imports and persisted keys
-// 2) Defaults and external info
-// 3) HomePage widget + state lifecycle, init, dispose
-// 4) Persistence helpers (load/save/clear)
-// 5) Timer and refresh cycle
-// 6) HTTP probe helpers and mapping
-// 7) Data generation for sources (A,B mock; C Open‑Meteo; D USGS)
-// 8) Utility helpers (icons, messages, progress, formatting)
-// 9) UI: AppBar, source table, dialogs
-// 10) Settings dialogs (per-source + global) — global includes color-vision selector
-// 11) Compute helpers (three-checks)
-// 12) Error and Log pages
-// 13) Logout handling (added) — calls backend /logout then performs local logout
-// 14) Color vision / palette helpers (improved; includes 'nav' entry and safer error colors)
+// Sections with citations:
+//  1) Imports and persisted keys
+//     - Flutter Material library: https://api.flutter.dev/flutter/material/material-library.html
+//     - Shared preferences: https://pub.dev/packages/shared_preferences
+//     - HTTP client: https://pub.dev/packages/http
+//     - Dart async (Timer/Future): https://api.dart.dev/stable/dart-async/dart-async-library.html
+//     - Dart convert (JSON): https://api.dart.dev/stable/dart-convert/dart-convert-library.html
+//
+//  2) Defaults and enums
+//     - Dart language (enums): https://dart.dev/language/enums
+//
+//  3) HomePage widget and lifecycle
+//     - Stateful and stateless widgets: https://docs.flutter.dev/development/ui/interactive#stateful-and-stateless-widgets
+//
+//  4) Persistence helpers
+//     - Shared preferences: https://pub.dev/packages/shared_preferences
+//
+//  5) Updates (periodic polling)
+//     - Dart Timer: https://api.dart.dev/stable/dart-async/Timer-class.html
+//
+//  6) HTTP helpers and JSON probing
+//     - Flutter networking (fetch data): https://docs.flutter.dev/cookbook/networking/fetch-data
+//     - Dart JSON decoding: https://api.flutter.dev/flutter/dart-convert/jsonDecode.html
+//     - HTTP package: https://pub.dev/packages/http
+//
+//  7) Data generation for sources (A/B backend, C/D simulated)
+//     - Flutter networking (fetch data): https://docs.flutter.dev/cookbook/networking/fetch-data
+//     - Dart math (Random): https://api.dart.dev/stable/dart-math/dart-math-library.html
+//
+//  8) Status aggregation and formatting helpers
+//     - Icon widget: https://api.flutter.dev/flutter/widgets/Icon-class.html
+//     - Material Icons: https://fonts.google.com/icons
+//
+//  9) UI building (AppBar, list, dialogs)
+//     - Material library (AppBar, ListView, etc.): https://api.flutter.dev/flutter/material/material-library.html
+//     - Flutter layout: https://docs.flutter.dev/development/ui/layout
+//     - AlertDialog: https://api.flutter.dev/flutter/material/AlertDialog-class.html
+//
+// 10) Settings dialogs (per-source + global)
+//     - Flutter dialogs (cookbook): https://docs.flutter.dev/cookbook/design/dialogs
+//     - StatefulBuilder: https://api.flutter.dev/flutter/widgets/StatefulBuilder-class.html
+//
+// 11) Error and Log helpers and pages
+//     - TabBar: https://api.flutter.dev/flutter/material/TabBar-class.html
+//     - TabBarView: https://api.flutter.dev/flutter/material/TabBarView-class.html
+//
+// 12) Logout handling
+//     - HTTP requests in Flutter: https://docs.flutter.dev/cookbook/networking/fetch-data
+//     - HTTP package: https://pub.dev/packages/http
+//
+// 13) Color palettes and filters
+//     - ColorFilter: https://api.flutter.dev/flutter/dart-ui/ColorFilter-class.html
+//     - Accessibility overview: https://docs.flutter.dev/development/accessibility-and-localization/accessibility
+//
+// 14) Utility functions
+//     - Dart DateTime: https://api.dart.dev/stable/dart-core/DateTime-class.html
+//     - Dart convert (JSON formatting): https://api.dart.dev/stable/dart-convert/dart-convert-library.html
 // -----------------------------------------------------------------------------
 
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
-import 'dart:ui' as ui;
-
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart'; // Clipboard support
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
 
-import 'about_page.dart'; // small About reuse from a separate file
-import 'main.dart'; // for LoginPage navigation on logout
+import 'about_page.dart';
+import 'main.dart';
 
-// Persisted keys
+// -----------------------
+// 1) Imports and persisted keys
+// -----------------------
 const String PREFS_OLD_SNAPSHOT = 'oldSnapshot';
 const String PREFS_ERROR_LOG = 'errorLog';
 const String PREFS_DAILY_LOG = 'dailyLog';
 const String PREFS_REFRESH_INTERVAL = 'refreshIntervalSeconds';
 const String PREFS_SOURCE_SETTINGS = 'sourceSettings';
-const String PREFS_COLOR_MODE = 'colorVisionMode'; // persisted color-vision selection
+const String PREFS_COLOR_MODE = 'colorVisionMode';
+const String PREFS_LAST_COMBINED_REPORT = 'lastCombinedReport';
+const String PREFS_LAST_EXPORT_TXT = 'lastExportTxt';
 
-// Defaults
-const int DEFAULT_REFRESH_SECONDS = 60; // default refresh every 60 seconds
-const int DEFAULT_STALE_MINUTES_CONN = 5; // connection considered stale after this many minutes
-const int DEFAULT_STALE_MINUTES_REP = 5; // report considered stale after this many minutes
-const double DEFAULT_VARIANCE_PERCENT = 10.0; // percent change threshold to mark a warning
-const int PROGRESS_ANIMATION_SECONDS = 10; // how long the "recent update" animation should run
+// -----------------------
+// 2) Defaults and enums
+// -----------------------
+const int DEFAULT_REFRESH_SECONDS = 60;
+const int DEFAULT_STALE_MINUTES_CONN = 5;
+const int DEFAULT_STALE_MINUTES_REP = 5;
+const double DEFAULT_VARIANCE_PERCENT = 10.0;
+const int PROGRESS_ANIMATION_SECONDS = 10;
 
-// Color vision modes supported by the UI (persisted)
 enum ColorVisionMode {
   Original,
   Protanomaly,
@@ -56,6 +103,9 @@ enum ColorVisionMode {
   Achromatopsia,
 }
 
+// -----------------------
+// 3) HomePage widget and lifecycle
+// -----------------------
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
@@ -66,26 +116,38 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   final Random _rng = Random();
 
+  // Sources list: each entry contains name, C1/C2/C3, R1/R2/R3, keys and details.
   List<Map<String, dynamic>> sources = [];
-  Map<String, dynamic>? oldSnapshot;
-  Timer? _refreshTimer;
 
+  Map<String, dynamic>? oldSnapshot;
   final List<Map<String, String>> _errorLog = [];
   final List<Map<String, String>> _dailyLog = [];
 
+  Timer? _refreshTimer;
   int _refreshSeconds = DEFAULT_REFRESH_SECONDS;
+
   Map<String, Map<String, dynamic>> _sourceSettings = {};
-
-  // track per-source progress start times (used for the progress indicator)
   final Map<String, DateTime> _progressStart = {};
+  Map<String, dynamic>? _lastCombinedReport;
 
-  // Logout backend endpoint config used by _logout()
-  // Set to false for production deployments
-  static const bool _isTestMode = false;
+  // Set _isTestMode to false for production builds; true for local testing.
+  static const bool _isTestMode = false; // set false for production builds
+
+  // Endpoints for the connection and report socket/json endpoints.
+  String get _c1Endpoint =>
+      _isTestMode ? 'http://127.0.0.1:5000/C1' : 'https://datawatchapp.com/api/C1';
+  String get _c2Endpoint =>
+      _isTestMode ? 'http://127.0.0.1:5000/C2' : 'https://datawatchapp.com/api/C2';
+  String get _c3Endpoint =>
+      _isTestMode ? 'http://127.0.0.1:5000/C3' : 'https://datawatchapp.com/api/C3';
+  String get _r1Endpoint =>
+      _isTestMode ? 'http://127.0.0.1:5000/R1' : 'https://datawatchapp.com/api/R1';
+  String get _r2Endpoint =>
+      _isTestMode ? 'http://127.0.0.1:5000/R2' : 'https://datawatchapp.com/api/R2';
+
   String get _logoutEndpoint =>
-      _isTestMode ? 'http://127.0.0.1:5000/logout' : 'https://datawatchapp.com/api/logout';
+      _isTestMode ? 'http://127.0.0.1:5000/logout' : 'https://datawatchapp.com/logout';
 
-  // Color vision state (default Original). Persisted in prefs.
   ColorVisionMode _colorMode = ColorVisionMode.Original;
 
   @override
@@ -100,16 +162,18 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     super.dispose();
   }
 
-  // Initialize persisted state, generate initial data and start the periodic refresh timer.
   Future<void> _initEverything() async {
-    await _loadPersistedState(); // load prefs and logs (including color mode)
-    await _generateMockData(); // generate initial set of source states
-    await _evaluateAndPersistChanges(); // compare and persist snapshot/logs if changed
-    _startTimer(); // start periodic refreshes
+    await _loadPersistedState();
+    await _loadLastCombinedReport();
+    await _generateData();
+    await _evaluateAndPersistChanges();
+    _startUpdates(); // polling-only updates
     setState(() {});
   }
 
-  // Load persisted snapshot, logs and settings from shared preferences.
+  // -----------------------
+  // 4) Persistence helpers
+  // -----------------------
   Future<void> _loadPersistedState() async {
     final prefs = await SharedPreferences.getInstance();
 
@@ -127,9 +191,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       try {
         final list = jsonDecode(storedErrors) as List<dynamic>;
         _errorLog.clear();
-        for (var e in list) {
-          _errorLog.add(Map<String, String>.from(e as Map));
-        }
+        for (var e in list) _errorLog.add(Map<String, String>.from(e as Map));
       } catch (_) {}
     }
 
@@ -138,9 +200,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       try {
         final list = jsonDecode(storedDaily) as List<dynamic>;
         _dailyLog.clear();
-        for (var e in list) {
-          _dailyLog.add(Map<String, String>.from(e as Map));
-        }
+        for (var e in list) _dailyLog.add(Map<String, String>.from(e as Map));
       } catch (_) {}
     }
 
@@ -158,7 +218,6 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       }
     }
 
-    // load color mode (if saved)
     final storedColorMode = prefs.getString(PREFS_COLOR_MODE);
     if (storedColorMode != null) {
       try {
@@ -169,22 +228,30 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     }
   }
 
-  // Save logs to preferences.
+  Future<void> _loadLastCombinedReport() async {
+    final prefs = await SharedPreferences.getInstance();
+    final stored = prefs.getString(PREFS_LAST_COMBINED_REPORT);
+    if (stored != null) {
+      try {
+        _lastCombinedReport = jsonDecode(stored) as Map<String, dynamic>;
+      } catch (_) {
+        _lastCombinedReport = null;
+      }
+    }
+  }
+
   Future<void> _savePersistedLogs() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(PREFS_ERROR_LOG, jsonEncode(_errorLog));
     await prefs.setString(PREFS_DAILY_LOG, jsonEncode(_dailyLog));
   }
 
-  // Save snapshot to preferences and keep a reference in memory.
   Future<void> _saveOldSnapshot(Map<String, dynamic> snapshot) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(PREFS_OLD_SNAPSHOT, jsonEncode(snapshot));
     oldSnapshot = snapshot;
   }
 
-  // Save settings to preferences.
-  // Updated: also persist color-mode.
   Future<void> _saveSettingsPrefs() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(PREFS_REFRESH_INTERVAL, _refreshSeconds);
@@ -192,7 +259,12 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     await prefs.setString(PREFS_COLOR_MODE, _colorMode.toString());
   }
 
-  // Clear all persisted data (snapshot, logs, settings).
+  Future<void> _saveLastCombinedReport(Map<String, dynamic> report) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(PREFS_LAST_COMBINED_REPORT, jsonEncode(report));
+    _lastCombinedReport = report;
+  }
+
   Future<void> _clearPersistedAll() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(PREFS_OLD_SNAPSHOT);
@@ -201,15 +273,24 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     await prefs.remove(PREFS_REFRESH_INTERVAL);
     await prefs.remove(PREFS_SOURCE_SETTINGS);
     await prefs.remove(PREFS_COLOR_MODE);
+    await prefs.remove(PREFS_LAST_COMBINED_REPORT);
     oldSnapshot = null;
     _errorLog.clear();
     _dailyLog.clear();
     _sourceSettings.clear();
     _colorMode = ColorVisionMode.Original;
+    _lastCombinedReport = null;
     setState(() {});
   }
 
-  // Start the periodic refresh timer.
+  // -----------------------
+  // 5) Updates (polling only)
+  // -----------------------
+  // Polling keeps UI updated.
+  void _startUpdates() {
+    _startTimer();
+  }
+
   void _startTimer() {
     _refreshTimer?.cancel();
     _refreshTimer = Timer.periodic(Duration(seconds: _refreshSeconds), (timer) async {
@@ -217,77 +298,15 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     });
   }
 
-  // Called on each refresh cycle: regenerate data and persist differences.
   Future<void> _onRefreshCycle() async {
-    await _generateMockData();
+    await _generateData();
     await _evaluateAndPersistChanges();
-    setState(() {});
-  }
-
-  // Build a lightweight snapshot map of the current sources to compare and persist.
-  Map<String, dynamic> _buildSnapshotFromSources() {
-    final map = <String, dynamic>{};
-    for (var s in sources) {
-      final name = s['name'] as String;
-      map[name] = {
-        'connection': s['connectionKey'],
-        'report': s['reportKey'],
-        'connectionDetails': s['connectionDetails'],
-        'reportDetails': s['reportDetails'],
-        'lastConn': s['lastConnUpdated'],
-        'lastRep': s['lastRepUpdated'],
-        'reportValue': s['reportValue'],
-      };
-    }
-    return map;
-  }
-
-  // Compare snapshot to previously saved snapshot and append logs if changed.
-  Future<void> _evaluateAndPersistChanges() async {
-    final snapshot = _buildSnapshotFromSources();
-    final changed = jsonEncode(snapshot) != jsonEncode(oldSnapshot ?? {});
-    if (changed) {
-      _appendLogsFromSnapshot(snapshot);
-      await _saveOldSnapshot(snapshot);
-      await _savePersistedLogs();
-    }
-  }
-
-  // Append error/daily entries based on the snapshot.
-  void _appendLogsFromSnapshot(Map<String, dynamic> snapshot) {
-    final now = DateTime.now().toIso8601String();
-
-    snapshot.forEach((name, value) {
-      final entry = value as Map<String, dynamic>;
-      final conn = entry['connection'] as String? ?? 'unknown';
-      final rep = entry['report'] as String? ?? 'unknown';
-      final connDetails = entry['connectionDetails'] as String? ?? '';
-      final repDetails = entry['reportDetails'] as String? ?? '';
-
-      if (conn == 'error' || conn == 'down') {
-        _errorLog.insert(
-            0, {'time': now, 'description': '$name connection: $connDetails', 'status': conn.toUpperCase()});
-      }
-
-      if ((rep == 'error' || rep == 'down')) {
-        if (!(conn == 'ok' || conn == 'stale')) {
-          _errorLog.insert(
-              0, {'time': now, 'description': '$name report: $repDetails', 'status': rep.toUpperCase()});
-        }
-      }
-
-      _dailyLog.insert(0, {'time': now, 'description': '$name update - conn:$conn rep:$rep', 'status': 'INFO'});
-
-      if (_errorLog.length > 1000) _errorLog.removeRange(1000, _errorLog.length);
-      if (_dailyLog.length > 2000) _dailyLog.removeRange(2000, _dailyLog.length);
-    });
+    if (mounted) setState(() {});
   }
 
   // -----------------------
-  // HTTP probe helpers
+  // 6) HTTP helpers and JSON probing
   // -----------------------
-
-  // Probe a URL and return a small map with status, latency and parsed JSON body if available.
   Future<Map<String, dynamic>> _probeUrl(String url, {Duration timeout = const Duration(seconds: 5)}) async {
     final result = {'status': 'down', 'latencyMs': 9999, 'body': null};
     try {
@@ -299,12 +318,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         try {
           final body = jsonDecode(resp.body);
           result['body'] = body;
-          if (latency < 800) {
-            result['status'] = 'ok';
-          } else {
-            result['status'] = 'warning';
-          }
-        } catch (e) {
+          result['status'] = latency < 800 ? 'ok' : 'warning';
+        } catch (_) {
           result['status'] = 'error';
         }
       } else {
@@ -312,62 +327,42 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       }
     } on TimeoutException {
       result['status'] = 'down';
-    } catch (e) {
+    } catch (_) {
       result['status'] = 'down';
     }
     return result;
   }
 
-  // Map the probe result to our standardized keys and optionally extract a numeric value.
-  Map<String, dynamic> _mapProbeToKeysAndValue(
-      String sourceName, Map<String, dynamic>? probeBody, String probeStatus) {
-    final connKey = probeStatus;
-    String repKey = probeStatus;
-    double? reportValue;
+  Future<Map<String, dynamic>?> _probeJsonEndpoint(String url, {Duration timeout = const Duration(seconds: 5)}) async {
     try {
-      if (sourceName.contains('Source C')) {
-        // Open-Meteo: current_weather.temperature => numeric value used for variance checks.
-        if (probeBody != null &&
-            probeBody['current_weather'] != null &&
-            probeBody['current_weather']['temperature'] != null) {
-          repKey = 'ok';
-          final tmp = probeBody['current_weather']['temperature'];
-          if (tmp is num) reportValue = tmp.toDouble();
-        } else {
-          repKey = 'warning';
-        }
-      } else if (sourceName.contains('Source D')) {
-        // USGS: features[0].properties.mag => numeric magnitude.
-        if (probeBody != null && probeBody['features'] is List && (probeBody['features'] as List).isNotEmpty) {
-          final f = (probeBody['features'] as List).first;
-          if (f is Map && f['properties'] is Map && f['properties']['mag'] != null) {
-            repKey = 'ok';
-            final m = f['properties']['mag'];
-            if (m is num) reportValue = m.toDouble();
-          } else {
-            repKey = 'warning';
-          }
-        } else {
-          repKey = 'warning';
-        }
+      final resp = await http.get(Uri.parse(url)).timeout(timeout);
+      if (resp.statusCode == 200) {
+        final body = jsonDecode(resp.body);
+        if (body is Map<String, dynamic>) return body;
       }
-    } catch (_) {
-      repKey = 'error';
-    }
-    return {'connection': connKey, 'report': repKey, 'value': reportValue};
+    } catch (_) {}
+    return null;
   }
 
   // -----------------------
-  // Data generation (4 sources: A,B mock; C Open-Meteo; D USGS)
+  // 7) Data generation for sources (A/B backend, C/D simulated)
   // -----------------------
+  String _normalizeStatus(dynamic s) {
+    if (s == null) return 'down';
+    final str = s.toString().toLowerCase();
+    if (str.contains('ok')) return 'ok';
+    if (str.contains('stale')) return 'stale';
+    if (str.contains('warn')) return 'warning';
+    if (str.contains('error')) return 'error';
+    if (str.contains('down')) return 'down';
+    return 'warning';
+  }
 
-  // Generate the sources list: two mock sources and two real API probes.
-  Future<void> _generateMockData() async {
+  Future<void> _generateData() async {
     final now = DateTime.now();
     final prev = oldSnapshot ?? {};
     List<Map<String, dynamic>> newSources = [];
 
-    // Mark progress start for the "recent update" animation.
     void _markProgressStart(String name) {
       _progressStart[name] = DateTime.now();
       Future.delayed(const Duration(seconds: PROGRESS_ANIMATION_SECONDS + 1), () {
@@ -375,439 +370,286 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       });
     }
 
-    // --- Source A (mock) ---
+    // Source A (backend) - use configured endpoints C1..R2
     {
-      final name = 'Source A';
-      final prevValue = prev.containsKey(name) ? (prev[name]['reportValue'] as num?)?.toDouble() : null;
+      final name = _sourceSettings.containsKey('Source A') && _sourceSettings['Source A']!.containsKey('displayName')
+          ? _sourceSettings['Source A']!['displayName'] as String
+          : 'Source A';
 
-      String connKey = _pickConnKey(); // simulated connectivity state
-      String repKey = _pickRepKey(); // simulated report state
+      // Use the endpoint getters so test vs production is consistent with main.dart
+      final c1Json = await _probeJsonEndpoint(_c1Endpoint);
+      final c2Json = await _probeJsonEndpoint(_c2Endpoint);
+      final c3Json = await _probeJsonEndpoint(_c3Endpoint);
+      final r1Json = await _probeJsonEndpoint(_r1Endpoint);
+      final r2Json = await _probeJsonEndpoint(_r2Endpoint);
 
-      double reportValue = 15.0 + _rng.nextDouble() * 10.0; // simulated metric
-      if (_rng.nextDouble() < 0.24 && prevValue != null) {
-        reportValue = prevValue; // sometimes repeat previous to avoid variance
-      }
-      if (_rng.nextDouble() < 0.06) {
-        reportValue += (_rng.nextBool() ? 1 : -1) * (5 + _rng.nextDouble() * 10); // occasional spike
-      }
+      final c1 = {
+        'database': _normalizeStatus(c1Json?['database']),
+        'api': _normalizeStatus(c1Json?['api']),
+        'socket': _normalizeStatus(c1Json?['socket']),
+      };
+      final c2 = {'status': _normalizeStatus(c2Json?['status'])};
+      final c3 = {
+        'data': _normalizeStatus(c3Json?['data']),
+        'variance': _normalizeStatus(c3Json?['variance']),
+      };
 
-      DateTime connTs = now.subtract(Duration(minutes: _rng.nextInt(3)));
-      DateTime repTs = now.subtract(Duration(minutes: _rng.nextInt(4)));
+      final r1Status = _normalizeStatus(r1Json?['status']);
+      final r2Status = _normalizeStatus(r2Json?['status']);
 
-      String connDetails = _messageFor(connKey, 'connection', name, connTs);
-      String repDetails = 'value: ${reportValue.toStringAsFixed(2)} at ${repTs.toIso8601String()}';
+      final r1Details = _buildR1Details(name, c1);
+      final r2Details = _buildR2Details(name, c2);
+      final r3Status = _combineReportStatus(r1Status, r2Status);
 
-      final settings = _sourceSettings[name];
-      final staleMinutesConn = settings != null && settings['staleMinutesConn'] is int
-          ? settings['staleMinutesConn'] as int
-          : DEFAULT_STALE_MINUTES_CONN;
-      final staleMinutesRep = settings != null && settings['staleMinutesRep'] is int
-          ? settings['staleMinutesRep'] as int
-          : DEFAULT_STALE_MINUTES_REP;
-      final variancePercent = settings != null && settings['variancePercent'] is num
-          ? (settings['variancePercent'] as num).toDouble()
-          : DEFAULT_VARIANCE_PERCENT;
-      final dueHour = settings != null && settings['reportDueHour'] is int ? settings['reportDueHour'] as int : 0;
-      final dueMinute = settings != null && settings['reportDueMinute'] is int ? settings['reportDueMinute'] as int : 0;
+      final connKey = _aggregateConnectionButtonStatus(c1, c2, c3);
+      final repKey = r3Status;
 
-      if (DateTime.now().difference(connTs).inMinutes >= staleMinutesConn &&
-          connKey != 'down' &&
-          connKey != 'error') {
-        final treatConn = settings != null && settings['treatStaleAsConn'] is String
-            ? settings['treatStaleAsConn'] as String
-            : 'stale';
-        connKey = treatConn;
-        connDetails = _messageFor(treatConn, 'connection', name, connTs);
-      }
+      final connDetails = _humanCDetails(c1, c2, c3);
+      final repDetails = _humanRDetails(r1Details, r2Details, r3Status);
 
-      String finalRepKey = repKey;
-      if (prevValue != null) {
-        final diff = (reportValue - prevValue).abs();
-        final pct = prevValue == 0 ? (diff > 0 ? 100.0 : 0.0) : (diff / prevValue * 100.0);
-        if (pct >= variancePercent) {
-          finalRepKey = 'warning';
-        }
-      }
-
-      final dueToday = DateTime(now.year, now.month, now.day, dueHour, dueMinute);
-      final dueWindowStart = dueToday.subtract(const Duration(minutes: 30));
-      final hasRecentReport = repTs.isAfter(dueWindowStart);
-      if (now.isBefore(dueToday)) {
-        // before due: nothing additional
-      } else {
-        if (!hasRecentReport) {
-          finalRepKey = 'error';
-        } else {
-          if (repTs.isAfter(dueToday)) {
-            _dailyLog.insert(0, {
-              'time': DateTime.now().toIso8601String(),
-              'description': '$name late report submitted at ${repTs.toIso8601String()}',
-              'status': 'LATE'
-            });
-            if (_dailyLog.length > 2000) _dailyLog.removeRange(2000, _dailyLog.length);
-          }
-        }
-      }
-
-      if (now.isAfter(dueWindowStart) && now.isBefore(dueToday)) {
-        if (!hasRecentReport) {
-          finalRepKey = 'warning';
-        }
-      }
-
-      repDetails = 'value: ${reportValue.toStringAsFixed(2)} at ${repTs.toIso8601String()}';
+      final tsIso = now.toIso8601String();
       _markProgressStart(name);
 
       newSources.add({
         'name': name,
         'connectionKey': connKey,
-        'reportKey': finalRepKey,
+        'reportKey': repKey,
         'connectionIcon': _iconForKey(connKey),
-        'reportIcon': _iconForKey(finalRepKey),
+        'reportIcon': _iconForKey(repKey),
         'connectionDetails': connDetails,
         'reportDetails': repDetails,
-        'lastConnUpdated': connTs.toIso8601String(),
-        'lastRepUpdated': repTs.toIso8601String(),
+        'lastConnUpdated': tsIso,
+        'lastRepUpdated': tsIso,
         'isUpdatingConn': false,
         'isUpdatingRep': false,
-        'staleMinutesConn': staleMinutesConn,
-        'staleMinutesRep': staleMinutesRep,
-        'variancePercent': variancePercent,
-        'reportDueHour': dueHour,
-        'reportDueMinute': dueMinute,
-        'reportValue': reportValue,
+        'staleMinutesConn': _sourceSettings['Source A']?['staleMinutesConn'] ?? DEFAULT_STALE_MINUTES_CONN,
+        'staleMinutesRep': _sourceSettings['Source A']?['staleMinutesRep'] ?? DEFAULT_STALE_MINUTES_REP,
+        'variancePercent': _sourceSettings['Source A']?['variancePercent'] ?? DEFAULT_VARIANCE_PERCENT,
+        'reportDueHour': _sourceSettings['Source A']?['reportDueHour'] ?? 0,
+        'reportDueMinute': _sourceSettings['Source A']?['reportDueMinute'] ?? 0,
+        'reportValue': null,
+        'C1': c1,
+        'C2': c2,
+        'C3': c3,
+        'R1': {'status': r1Status, 'details': r1Details},
+        'R2': {'status': r2Status, 'details': r2Details},
+        'R3': {'status': r3Status, 'generatedAt': tsIso},
       });
     }
 
-    // --- Source B (mock) ---
+    // Source B (backend)
     {
-      final name = 'Source B';
-      final prevValue = prev.containsKey(name) ? (prev[name]['reportValue'] as num?)?.toDouble() : null;
+      final name = _sourceSettings.containsKey('Source B') && _sourceSettings['Source B']!.containsKey('displayName')
+          ? _sourceSettings['Source B']!['displayName'] as String
+          : 'Source B';
 
-      String connKey = _pickConnKey();
-      String repKey = _pickRepKey();
+      final c1Json = await _probeJsonEndpoint(_c1Endpoint);
+      final c2Json = await _probeJsonEndpoint(_c2Endpoint);
+      final c3Json = await _probeJsonEndpoint(_c3Endpoint);
+      final r1Json = await _probeJsonEndpoint(_r1Endpoint);
+      final r2Json = await _probeJsonEndpoint(_r2Endpoint);
 
-      double reportValue = 100.0 * (0.5 + _rng.nextDouble());
-      if (_rng.nextDouble() < 0.2 && prevValue != null) reportValue = prevValue;
-      if (_rng.nextDouble() < 0.05) reportValue += (_rng.nextBool() ? 1 : -1) * (_rng.nextDouble() * 30);
+      final c1 = {
+        'database': _normalizeStatus(c1Json?['database']),
+        'api': _normalizeStatus(c1Json?['api']),
+        'socket': _normalizeStatus(c1Json?['socket']),
+      };
+      final c2 = {'status': _normalizeStatus(c2Json?['status'])};
+      final c3 = {
+        'data': _normalizeStatus(c3Json?['data']),
+        'variance': _normalizeStatus(c3Json?['variance']),
+      };
 
-      DateTime connTs = now.subtract(Duration(minutes: 1 + _rng.nextInt(4)));
-      DateTime repTs = now.subtract(Duration(minutes: 2 + _rng.nextInt(6)));
+      final r1Status = _normalizeStatus(r1Json?['status']);
+      final r2Status = _normalizeStatus(r2Json?['status']);
 
-      String connDetails = _messageFor(connKey, 'connection', name, connTs);
-      String repDetails = 'value: ${reportValue.toStringAsFixed(2)} at ${repTs.toIso8601String()}';
+      final r1Details = _buildR1Details(name, c1);
+      final r2Details = _buildR2Details(name, c2);
+      final r3Status = _combineReportStatus(r1Status, r2Status);
 
-      final settings = _sourceSettings[name];
-      final staleMinutesConn = settings != null && settings['staleMinutesConn'] is int
-          ? settings['staleMinutesConn'] as int
-          : DEFAULT_STALE_MINUTES_CONN;
-      final staleMinutesRep = settings != null && settings['staleMinutesRep'] is int
-          ? settings['staleMinutesRep'] as int
-          : DEFAULT_STALE_MINUTES_REP;
-      final variancePercent = settings != null && settings['variancePercent'] is num
-          ? (settings['variancePercent'] as num).toDouble()
-          : DEFAULT_VARIANCE_PERCENT;
-      final dueHour = settings != null && settings['reportDueHour'] is int ? settings['reportDueHour'] as int : 0;
-      final dueMinute = settings != null && settings['reportDueMinute'] is int ? settings['reportDueMinute'] as int : 0;
+      final connKey = _aggregateConnectionButtonStatus(c1, c2, c3);
+      final repKey = r3Status;
 
-      if (DateTime.now().difference(connTs).inMinutes >= staleMinutesConn &&
-          connKey != 'down' &&
-          connKey != 'error') {
-        final treatConn = settings != null && settings['treatStaleAsConn'] is String
-            ? settings['treatStaleAsConn'] as String
-            : 'stale';
-        connKey = treatConn;
-        connDetails = _messageFor(treatConn, 'connection', name, connTs);
-      }
+      final connDetails = _humanCDetails(c1, c2, c3);
+      final repDetails = _humanRDetails(r1Details, r2Details, r3Status);
 
-      String finalRepKey = repKey;
-      if (prevValue != null) {
-        final diff = (reportValue - prevValue).abs();
-        final pct = prevValue == 0 ? (diff > 0 ? 100.0 : 0.0) : (diff / prevValue * 100.0);
-        if (pct >= variancePercent) finalRepKey = 'warning';
-      }
-
-      final dueToday = DateTime(now.year, now.month, now.day, dueHour, dueMinute);
-      final dueWindowStart = dueToday.subtract(const Duration(minutes: 30));
-      final hasRecentReport = repTs.isAfter(dueWindowStart);
-
-      if (now.isBefore(dueToday)) {
-      } else {
-        if (!hasRecentReport) {
-          finalRepKey = 'error';
-        } else {
-          if (repTs.isAfter(dueToday)) {
-            _dailyLog.insert(0, {
-              'time': DateTime.now().toIso8601String(),
-              'description': '$name late report submitted at ${repTs.toIso8601String()}',
-              'status': 'LATE'
-            });
-            if (_dailyLog.length > 2000) _dailyLog.removeRange(2000, _dailyLog.length);
-          }
-        }
-      }
-
-      if (now.isAfter(dueWindowStart) && now.isBefore(dueToday)) {
-        if (!hasRecentReport) {
-          finalRepKey = 'warning';
-        }
-      }
-
-      repDetails = 'value: ${reportValue.toStringAsFixed(2)} at ${repTs.toIso8601String()}';
+      final tsIso = now.toIso8601String();
       _markProgressStart(name);
 
       newSources.add({
         'name': name,
         'connectionKey': connKey,
-        'reportKey': finalRepKey,
+        'reportKey': repKey,
         'connectionIcon': _iconForKey(connKey),
-        'reportIcon': _iconForKey(finalRepKey),
+        'reportIcon': _iconForKey(repKey),
         'connectionDetails': connDetails,
         'reportDetails': repDetails,
-        'lastConnUpdated': connTs.toIso8601String(),
-        'lastRepUpdated': repTs.toIso8601String(),
+        'lastConnUpdated': tsIso,
+        'lastRepUpdated': tsIso,
         'isUpdatingConn': false,
         'isUpdatingRep': false,
-        'staleMinutesConn': staleMinutesConn,
-        'staleMinutesRep': staleMinutesRep,
-        'variancePercent': variancePercent,
-        'reportDueHour': dueHour,
-        'reportDueMinute': dueMinute,
-        'reportValue': reportValue,
+        'staleMinutesConn': _sourceSettings['Source B']?['staleMinutesConn'] ?? DEFAULT_STALE_MINUTES_CONN,
+        'staleMinutesRep': _sourceSettings['Source B']?['staleMinutesRep'] ?? DEFAULT_STALE_MINUTES_REP,
+        'variancePercent': _sourceSettings['Source B']?['variancePercent'] ?? DEFAULT_VARIANCE_PERCENT,
+        'reportDueHour': _sourceSettings['Source B']?['reportDueHour'] ?? 0,
+        'reportDueMinute': _sourceSettings['Source B']?['reportDueMinute'] ?? 0,
+        'reportValue': null,
+        'C1': c1,
+        'C2': c2,
+        'C3': c3,
+        'R1': {'status': r1Status, 'details': r1Details},
+        'R2': {'status': r2Status, 'details': r2Details},
+        'R3': {'status': r3Status, 'generatedAt': tsIso},
       });
     }
 
-    // -----------------------
-    // Source C (Open-Meteo: weather)
-    // -----------------------
+    // Source C (Open-Meteo simulation)
     {
-      final name = 'Source C'; // define source name
+      final name = _sourceSettings.containsKey('Source C') && _sourceSettings['Source C']!.containsKey('displayName')
+          ? _sourceSettings['Source C']!['displayName'] as String
+          : 'Source C';
+
       final url =
-          'https://api.open-meteo.com/v1/forecast?latitude=35.3733&longitude=-119.0187&current_weather=true'; // Open-Meteo URL
-      // call the API and get probe map
-      final probe = await _probeUrl(url, timeout: const Duration(seconds: 5)); // call the API and get probe map
-      final latency = probe['latencyMs'] as int? ?? 9999; // read latency from probe
-      final pbody = probe['body'] as Map<String, dynamic>?; // read parsed JSON body if any
-      final pstatus = probe['status'] as String; // get normalized status string
-
-      final mapped =
-          _mapProbeToKeysAndValue(name, pbody, pstatus); // map probe body + status to our standardized keys
-      String connKeyForCompare = mapped['connection'] ?? 'down'; // pick connection key or default to 'down'
-      String repKeyForCompare = mapped['report'] ?? 'warning'; // pick report key or default to 'warning'
-      final double? reportValue =
-          mapped['value'] as double?; // numeric value extracted if mapping found one
-
-      final nowTs = DateTime.now(); // timestamp used for last update fields
-      final connDetails =
-          'connection ${connKeyForCompare.toUpperCase()}: ${latency}ms to Open-Meteo'; // readable connection detail
-      final repDetails = reportValue != null ? 'value: ${reportValue.toStringAsFixed(2)}' : 'no value'; // readable report detail
-
-      final settings = _sourceSettings[name]; // attempt to load per-source settings
-      final staleMinutesConn = settings != null && settings['staleMinutesConn'] is int
-          ? settings['staleMinutesConn'] as int
-          : DEFAULT_STALE_MINUTES_CONN; // connection staleness threshold
-      final staleMinutesRep = settings != null && settings['staleMinutesRep'] is int
-          ? settings['staleMinutesRep'] as int
-          : DEFAULT_STALE_MINUTES_REP; // report staleness threshold
-      final variancePercent = settings != null && settings['variancePercent'] is num
-          ? (settings['variancePercent'] as num).toDouble()
-          : DEFAULT_VARIANCE_PERCENT; // variance percent threshold
-      final dueHour = settings != null && settings['reportDueHour'] is int ? settings['reportDueHour'] as int : 0; // report due hour
-      final dueMinute =
-          settings != null && settings['reportDueMinute'] is int ? settings['reportDueMinute'] as int : 0; // report due minute
-
-      if (pstatus == 'ok' && latency > 1500) connKeyForCompare = 'warning'; // mark connection warning on high latency
-
-      final prevValue =
-          prev.containsKey(name) ? (prev[name]['reportValue'] as num?)?.toDouble() : null; // previous numeric value
-      String finalRepKey = repKeyForCompare; // start final report key from mapped result
-      if (reportValue != null && prevValue != null) {
-        final diff = (reportValue - prevValue).abs(); // absolute difference
-        final pct = prevValue == 0 ? (diff > 0 ? 100.0 : 0.0) : (diff / prevValue * 100.0); // percent change
-        if (pct >= variancePercent) finalRepKey = 'warning'; // flag warning if change >= threshold
-      }
-
-      final dueToday = DateTime(nowTs.year, nowTs.month, nowTs.day, dueHour, dueMinute); // today at due time
-      final dueWindowStart = dueToday.subtract(const Duration(minutes: 30)); // begin of recent window
-      final repTs = nowTs; // treat probe time as report time
-      final hasRecentReport = repTs.isAfter(dueWindowStart); // whether report is recent
-
-      if (nowTs.isBefore(dueToday)) {
-        // before due: ok/warning by variance (no action)
-      } else {
-        if (!hasRecentReport) {
-          finalRepKey = 'error'; // past due + no recent -> error
-        } else {
-          if (repTs.isAfter(dueToday)) {
-            _dailyLog.insert(0, {
-              'time': DateTime.now().toIso8601String(),
-              'description': '$name late report submitted at ${repTs.toIso8601String()}',
-              'status': 'LATE'
-            }); // if report after due -> log LATE
-            if (_dailyLog.length > 2000) _dailyLog.removeRange(2000, _dailyLog.length); // cap daily log size
-          }
-        }
-      }
-
-      _markProgressStart(name); // mark progress start for UI animation
-
-      newSources.add({
-        'name': name,
-        'connectionKey': connKeyForCompare,
-        'reportKey': finalRepKey,
-        'connectionIcon': _iconForKey(connKeyForCompare),
-        'reportIcon': _iconForKey(finalRepKey),
-        'connectionDetails': connDetails,
-        'reportDetails': repDetails,
-        'lastConnUpdated': nowTs.toIso8601String(),
-        'lastRepUpdated': nowTs.toIso8601String(),
-        'isUpdatingConn': false,
-        'isUpdatingRep': false,
-        'staleMinutesConn': staleMinutesConn,
-        'staleMinutesRep': staleMinutesRep,
-        'variancePercent': variancePercent,
-        'reportDueHour': dueHour,
-        'reportDueMinute': dueMinute,
-        'reportValue': reportValue,
-      });
-    }
-
-    // -----------------------
-    // Source D (USGS)
-    // -----------------------
-    {
-      final name = 'Source D'; // set source name
-      final startIso = DateTime.now().subtract(const Duration(hours: 1)).toUtc().toIso8601String(); // start time param
-      final url =
-          'https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&limit=1&starttime=$startIso'; // build USGS query URL
-      // call the probe helper to GET the URL and measure latency/status
+          'https://api.open-meteo.com/v1/forecast?latitude=35.3733&longitude=-119.0187&current_weather=true';
       final probe = await _probeUrl(url, timeout: const Duration(seconds: 5));
-      final latency = probe['latencyMs'] as int? ?? 9999; // read latency from probe result
-      final pbody = probe['body'] as Map<String, dynamic>?; // parsed JSON body from the probe, or null
-      final pstatus = probe['status'] as String; // normalized probe status string
+      final latency = probe['latencyMs'] as int? ?? 9999;
+      final pbody = probe['body'] as Map<String, dynamic>?;
+      final pstatus = probe['status'] as String;
 
-      final mapped =
-          _mapProbeToKeysAndValue(name, pbody, pstatus); // map probe body/status into standardized keys + value
-      String connKeyForCompare = mapped['connection'] ?? 'down'; // connection key fallback
-      String repKeyForCompare = mapped['report'] ?? 'warning'; // report key fallback
-      final double? reportValue = mapped['value'] as double?; // numeric metric (e.g., magnitude)
+      final mapped = _mapProbeToKeysAndValue(name, pbody, pstatus);
+      final double? temp = mapped['value'] as double?;
+      final nowTs = DateTime.now();
 
-      final nowTs = DateTime.now(); // store the current timestamp
-      final connDetails = 'connection ${connKeyForCompare.toUpperCase()}: ${latency}ms to USGS'; // connection detail string
-      final repDetails = reportValue != null ? 'magnitude: ${reportValue.toStringAsFixed(2)}' : 'no events'; // report detail string
-
-      final settings = _sourceSettings[name]; // per-source settings map
-      final staleMinutesConn = settings != null && settings['staleMinutesConn'] is int
-          ? settings['staleMinutesConn'] as int
-          : DEFAULT_STALE_MINUTES_CONN; // connection stale threshold
-      final staleMinutesRep = settings != null && settings['staleMinutesRep'] is int
-          ? settings['staleMinutesRep'] as int
-          : DEFAULT_STALE_MINUTES_REP; // report stale threshold
-      final variancePercent = settings != null && settings['variancePercent'] is num
-          ? (settings['variancePercent'] as num).toDouble()
-          : DEFAULT_VARIANCE_PERCENT; // variance percent threshold
-      final dueHour = settings != null && settings['reportDueHour'] is int ? settings['reportDueHour'] as int : 0; // due hour
-      final dueMinute = settings != null && settings['reportDueMinute'] is int ? settings['reportDueMinute'] as int : 0; // due minute
-
-      if (pstatus == 'ok' && latency > 1500) connKeyForCompare = 'warning'; // escalate to warning for high latency
-
-      final prevValue =
-          prev.containsKey(name) ? (prev[name]['reportValue'] as num?)?.toDouble() : null; // fetch previous value if exists
-      String finalRepKey = repKeyForCompare; // start final report key from mapped value
-      if (reportValue != null && prevValue != null) {
-        final diff = (reportValue - prevValue).abs(); // absolute difference
-        final pct = prevValue == 0 ? (diff > 0 ? 100.0 : 0.0) : (diff / prevValue * 100.0); // percent change
-        if (pct >= variancePercent) finalRepKey = 'warning'; // mark warning on large percent change
+      final c1 = {
+        'database': latency < 1500 ? 'ok' : 'warning',
+        'api': pstatus,
+        'socket': 'stale',
+      };
+      final c2 = {'status': pstatus == 'ok' ? (_rng.nextDouble() < 0.8 ? 'ok' : 'warning') : 'down'};
+      final prevValue = prev.containsKey(name) ? (prev[name]['reportValue'] as num?)?.toDouble() : null;
+      String varianceKey = 'ok';
+      if (temp != null && prevValue != null) {
+        final diff = (temp - prevValue).abs();
+        final pct = prevValue == 0 ? (diff > 0 ? 100.0 : 0.0) : (diff / prevValue * 100.0);
+        varianceKey = pct >= DEFAULT_VARIANCE_PERCENT ? 'warning' : 'ok';
       }
+      final c3 = {'data': temp == null ? 'warning' : 'ok', 'variance': varianceKey};
 
-      final dueToday = DateTime(nowTs.year, nowTs.month, nowTs.day, dueHour, dueMinute); // build today's due time
-      final dueWindowStart = dueToday.subtract(const Duration(minutes: 30)); // recent window start
-      final repTs = nowTs; // use now as the report time for this probe
-      final hasRecentReport = repTs.isAfter(dueWindowStart); // check recency
+      final r1Status = _mirrorFromC1(c1);
+      final r2Status = _mirrorFromC2(c2);
+      final r1Details = _buildR1Details(name, c1);
+      final r2Details = _buildR2Details(name, c2);
+      final r3Status = _combineReportStatus(r1Status, r2Status);
 
-      if (nowTs.isBefore(dueToday)) {
-        // before due -> nothing to change
-      } else {
-        if (!hasRecentReport) {
-          finalRepKey = 'error'; // past due with no recent report -> error
-        } else {
-          if (repTs.isAfter(dueToday)) {
-            _dailyLog.insert(0, {
-              'time': DateTime.now().toIso8601String(),
-              'description': '$name late report submitted at ${repTs.toIso8601String()}',
-              'status': 'LATE'
-            }); // log late submission
-            if (_dailyLog.length > 2000) _dailyLog.removeRange(2000, _dailyLog.length); // cap size
-          }
-        }
-      }
+      final connKey = _aggregateConnectionButtonStatus(c1, c2, c3);
+      final repKey = r3Status;
+      final connDetails = 'connection ${connKey.toUpperCase()}: ${latency}ms to Open-Meteo\n${_humanCDetails(c1, c2, c3)}';
+      final repDetails = _humanRDetails(r1Details, r2Details, r3Status);
 
-      _markProgressStart(name); // mark the recent update animation start
+      _markProgressStart(name);
 
       newSources.add({
         'name': name,
-        'connectionKey': connKeyForCompare,
-        'reportKey': finalRepKey,
-        'connectionIcon': _iconForKey(connKeyForCompare),
-        'reportIcon': _iconForKey(finalRepKey),
+        'connectionKey': connKey,
+        'reportKey': repKey,
+        'connectionIcon': _iconForKey(connKey),
+        'reportIcon': _iconForKey(repKey),
         'connectionDetails': connDetails,
         'reportDetails': repDetails,
         'lastConnUpdated': nowTs.toIso8601String(),
         'lastRepUpdated': nowTs.toIso8601String(),
         'isUpdatingConn': false,
         'isUpdatingRep': false,
-        'staleMinutesConn': staleMinutesConn,
-        'staleMinutesRep': staleMinutesRep,
-        'variancePercent': variancePercent,
-        'reportDueHour': dueHour,
-        'reportDueMinute': dueMinute,
-        'reportValue': reportValue,
+        'staleMinutesConn': _sourceSettings['Source C']?['staleMinutesConn'] ?? DEFAULT_STALE_MINUTES_CONN,
+        'staleMinutesRep': _sourceSettings['Source C']?['staleMinutesRep'] ?? DEFAULT_STALE_MINUTES_REP,
+        'variancePercent': _sourceSettings['Source C']?['variancePercent'] ?? DEFAULT_VARIANCE_PERCENT,
+        'reportDueHour': _sourceSettings['Source C']?['reportDueHour'] ?? 0,
+        'reportDueMinute': _sourceSettings['Source C']?['reportDueMinute'] ?? 0,
+        'reportValue': temp,
+        'C1': c1,
+        'C2': c2,
+        'C3': c3,
+        'R1': {'status': r1Status, 'details': r1Details},
+        'R2': {'status': r2Status, 'details': r2Details},
+        'R3': {'status': r3Status, 'generatedAt': nowTs.toIso8601String()},
       });
     }
 
-    // assign built list to state variable
+    // Source D (USGS simulation)
+    {
+      final name = _sourceSettings.containsKey('Source D') && _sourceSettings['Source D']!.containsKey('displayName')
+          ? _sourceSettings['Source D']!['displayName'] as String
+          : 'Source D';
+
+      final startIso = DateTime.now().subtract(const Duration(hours: 1)).toUtc().toIso8601String();
+      final url =
+          'https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&limit=1&starttime=$startIso';
+      final probe = await _probeUrl(url, timeout: const Duration(seconds: 5));
+      final latency = probe['latencyMs'] as int? ?? 9999;
+      final pbody = probe['body'] as Map<String, dynamic>?;
+      final pstatus = probe['status'] as String;
+
+      final mapped = _mapProbeToKeysAndValue(name, pbody, pstatus);
+      final double? magnitude = mapped['value'] as double?;
+      final nowTs = DateTime.now();
+
+      final c1 = {
+        'database': 'ok',
+        'api': pstatus,
+        'socket': 'stale',
+      };
+      final c2 = {'status': pstatus == 'ok' ? (_rng.nextDouble() < 0.85 ? 'ok' : 'warning') : 'down'};
+      final c3 = {
+        'data': magnitude == null ? 'warning' : 'ok',
+        'variance': _rng.nextDouble() < 0.15 ? 'warning' : 'ok',
+      };
+
+      final r1Status = _mirrorFromC1(c1);
+      final r2Status = _mirrorFromC2(c2);
+      final r1Details = _buildR1Details(name, c1);
+      final r2Details = _buildR2Details(name, c2);
+      final r3Status = _combineReportStatus(r1Status, r2Status);
+
+      final connKey = _aggregateConnectionButtonStatus(c1, c2, c3);
+      final repKey = r3Status;
+      final connDetails = 'connection ${connKey.toUpperCase()}: ${latency}ms to USGS\n${_humanCDetails(c1, c2, c3)}';
+      final repDetails = _humanRDetails(r1Details, r2Details, r3Status);
+
+      _markProgressStart(name);
+
+      newSources.add({
+        'name': name,
+        'connectionKey': connKey,
+        'reportKey': repKey,
+        'connectionIcon': _iconForKey(connKey),
+        'reportIcon': _iconForKey(repKey),
+        'connectionDetails': connDetails,
+        'reportDetails': repDetails,
+        'lastConnUpdated': nowTs.toIso8601String(),
+        'lastRepUpdated': nowTs.toIso8601String(),
+        'isUpdatingConn': false,
+        'isUpdatingRep': false,
+        'staleMinutesConn': _sourceSettings['Source D']?['staleMinutesConn'] ?? DEFAULT_STALE_MINUTES_CONN,
+        'staleMinutesRep': _sourceSettings['Source D']?['staleMinutesRep'] ?? DEFAULT_STALE_MINUTES_REP,
+        'variancePercent': _sourceSettings['Source D']?['variancePercent'] ?? DEFAULT_VARIANCE_PERCENT,
+        'reportDueHour': _sourceSettings['Source D']?['reportDueHour'] ?? 0,
+        'reportDueMinute': _sourceSettings['Source D']?['reportDueMinute'] ?? 0,
+        'reportValue': magnitude,
+        'C1': c1,
+        'C2': c2,
+        'C3': c3,
+        'R1': {'status': r1Status, 'details': r1Details},
+        'R2': {'status': r2Status, 'details': r2Details},
+        'R3': {'status': r3Status, 'generatedAt': nowTs.toIso8601String()},
+      });
+    }
+
     sources = newSources;
   }
 
   // -----------------------
-  // Utility helpers (icons, messages, progress)
+  // 8) Status aggregation and formatting helpers
   // -----------------------
-
-  // Randomly pick a connection key for mock sources.
-  String _pickConnKey() {
-    final r = _rng.nextDouble();
-    if (r < 0.10) return 'down';
-    if (r < 0.30) return 'warning';
-    return 'ok';
-  }
-
-  // Randomly pick a report key for mock sources.
-  String _pickRepKey() {
-    final r = _rng.nextDouble();
-    if (r < 0.10) return 'down';
-    if (r < 0.25) return 'warning';
-    return 'ok';
-  }
-
-  // Build a short human message for connection/report details.
-  String _messageFor(String key, String kind, String name, DateTime ts) {
-    switch (key) {
-      case 'ok':
-        return '$kind OK: ${kind == 'connection' ? "Connected" : "Report received"} at ${ts.toIso8601String()}';
-      case 'stale':
-        return '$kind Stale: New data matches previous snapshot, no new updates';
-      case 'down':
-        return '$kind Down: No response from the source';
-      case 'warning':
-        return '$kind Warning: Partial data or late arrival';
-      case 'error':
-        return '$kind Error: Failed to process incoming data';
-      default:
-        return '$kind Unknown state';
-    }
-  }
-
-  // Pick an icon for a status key.
   IconData _iconForKey(String k) {
     switch (k) {
       case 'ok':
@@ -825,51 +667,26 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     }
   }
 
-  // Pick a color for a status key using the active color-vision palette.
   Color _colorForKey(String k) {
-    final palette = _paletteForMode(_colorMode); // get palette for current color mode
-    final hex = palette[k] ?? palette['ok']!; // fallback to ok color
+    final palette = _paletteForMode(_colorMode);
+    final hex = palette[k] ?? palette['ok']!;
     return Color(int.parse(hex.replaceFirst('#', '0xff')));
   }
 
-  // Build a list of current error entries from the sources list.
-  List<Map<String, String>> _currentErrorsFromSources() {
-    final List<Map<String, String>> list = [];
-    final now = DateTime.now().toIso8601String();
-
-    for (var s in sources) {
-      final name = s['name'] as String;
-      final connKey = s['connectionKey'] as String;
-      final repKey = s['reportKey'] as String;
-      final connDetails = s['connectionDetails'] as String;
-      final repDetails = s['reportDetails'] as String;
-
-      if (connKey == 'error' || connKey == 'down') {
-        list.add({'time': now, 'description': '$name connection: $connDetails', 'status': connKey.toUpperCase()});
+  String _prettyJson(Object? jsonObj) {
+    try {
+      final encoder = const JsonEncoder.withIndent('  ');
+      if (jsonObj is String) {
+        final decoded = jsonDecode(jsonObj);
+        return encoder.convert(decoded);
+      } else {
+        return encoder.convert(jsonObj ?? {});
       }
-      if ((repKey == 'error' || repKey == 'down') && !(connKey == 'ok' || connKey == 'stale')) {
-        list.add({'time': now, 'description': '$name report: $repDetails', 'status': repKey.toUpperCase()});
-      }
+    } catch (_) {
+      return jsonObj?.toString() ?? '';
     }
-
-    return list;
   }
 
-  // Build a list of current log entries from the sources list.
-  List<Map<String, String>> _currentLogFromSources() {
-    final List<Map<String, String>> list = [];
-    final now = DateTime.now().toIso8601String();
-
-    for (var s in sources) {
-      final name = s['name'] as String;
-      final connKey = s['connectionKey'] as String;
-      final repKey = s['reportKey'] as String;
-      list.add({'time': now, 'description': '$name - conn:$connKey rep:$repKey', 'status': 'VIEW'});
-    }
-    return list;
-  }
-
-  // Compute a progress value 0..1 that blends recent "update" animation and aging toward staleness.
   double _computeProgressToStale(String? lastIso, int staleMinutes, String name) {
     final now = DateTime.now();
     double animationPart = 0.0;
@@ -894,20 +711,76 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     }
   }
 
-  // Format ISO string to HH:MM:SS for display.
-  String _formatTime(String? iso) {
-    if (iso == null) return 'never';
-    final dt = DateTime.tryParse(iso);
-    if (dt == null) return 'unknown';
-    return '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}:${dt.second.toString().padLeft(2, '0')}';
+  String _aggregateConnectionButtonStatus(Map<String, String> c1, Map<String, String> c2, Map<String, String> c3) {
+    final statuses = <String>{
+      c1['database'] ?? 'down',
+      c1['api'] ?? 'down',
+      c1['socket'] ?? 'down',
+      c2['status'] ?? 'down',
+      c3['data'] ?? 'down',
+      c3['variance'] ?? 'down',
+    };
+    if ((c3['data'] == 'stale') || (c3['variance'] == 'stale')) return 'stale';
+    if (statuses.length == 1) return statuses.first;
+    return 'warning';
+  }
+
+  String _mirrorFromC1(Map<String, String> c1) {
+    final set = {c1['database'], c1['api'], c1['socket']};
+    if (set.contains('down')) return 'down';
+    if (set.contains('error')) return 'error';
+    if (set.contains('warning')) return 'warning';
+    if (set.contains('stale')) return 'stale';
+    return 'ok';
+  }
+
+  String _mirrorFromC2(Map<String, String> c2) => c2['status'] ?? 'down';
+
+  String _combineReportStatus(String r1, String r2) {
+    if (r1 == 'down' || r2 == 'down') return 'down';
+    if (r1 == 'error' || r2 == 'error') return 'error';
+    if (r1 == 'warning' || r2 == 'warning') return 'warning';
+    if (r1 == 'stale' || r2 == 'stale') return 'stale';
+    return 'ok';
+  }
+
+  String _humanCDetails(Map<String, String> c1, Map<String, String> c2, Map<String, String> c3) {
+    final b1 = 'C1 (Connections)\n  Database: ${c1['database']}\n  API: ${c1['api']}\n  Socket: ${c1['socket']}';
+    final b2 = 'C2 (Movement/CRUD)\n  Status: ${c2['status']}';
+    final b3 = 'C3 (Validation)\n  Data: ${c3['data']}\n  Variance: ${c3['variance']}';
+    return '$b1\n$b2\n$b3';
+  }
+
+  String _buildR1Details(String sourceName, Map<String, String> c1) {
+    final lines = <String>[];
+    if (c1['database'] == 'down') lines.add('Database connection for $sourceName is down.');
+    if (c1['database'] == 'error') lines.add('Database connection for $sourceName returned an error.');
+    if (c1['api'] == 'down') lines.add('API connection for $sourceName is down.');
+    if (c1['api'] == 'error') lines.add('API connection for $sourceName returned an error.');
+    if (c1['socket'] == 'down') lines.add('Socket connection for $sourceName is down.');
+    if (c1['socket'] == 'error') lines.add('Socket connection for $sourceName returned an error.');
+    if (lines.isEmpty) lines.add('Connections healthy for $sourceName.');
+    return lines.join('\n');
+  }
+
+  String _buildR2Details(String sourceName, Map<String, String> c2) {
+    final s = c2['status'];
+    if (s == 'down') return 'Data movement (CRUD) for $sourceName is down.';
+    if (s == 'error') return 'Data movement (CRUD) for $sourceName encountered an error.';
+    if (s == 'warning') return 'Data movement (CRUD) for $sourceName shows partial success.';
+    if (s == 'stale') return 'Data movement (CRUD) for $sourceName appears stale.';
+    return 'Data movement (CRUD) healthy for $sourceName.';
+  }
+
+  String _humanRDetails(String r1Details, String r2Details, String r3Status) {
+    return 'R1 (Connections Report)\n  ${r1Details.replaceAll('\n', '\n  ')}\n'
+           'R2 (Movement Report)\n  ${r2Details}\n'
+           'R3 (Combined)\n  Status: $r3Status';
   }
 
   // -----------------------
-  // UI: build, dialogs, settings
+  // 9) UI building (AppBar, list, dialogs)
   // -----------------------
-
-  // Build the tappable logo and brand capsule used in the AppBar.
-  // Logo is wrapped in a ColorFiltered widget that applies a filter appropriate to the selected color-vision mode.
   Widget _buildLogoBrandButton() {
     final double screenWidth = MediaQuery.of(context).size.width;
     final bool isPhone = screenWidth <= 600.0;
@@ -922,10 +795,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     return InkWell(
       borderRadius: BorderRadius.circular(8),
       onTap: () {
-        Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => const AboutPage()),
-        );
+        Navigator.push(context, MaterialPageRoute(builder: (_) => const AboutPage()));
       },
       child: Container(
         margin: const EdgeInsets.only(left: 8),
@@ -935,10 +805,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(8),
-          border: Border.all(
-            color: navBarBorderColor,
-            width: 1,
-          ),
+          border: Border.all(color: navBarBorderColor, width: 1),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -948,7 +815,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
               height: logoSize,
               width: logoSize,
               child: ColorFiltered(
-                colorFilter: _colorFilterForMode(_colorMode), // apply a color filter that adapts the logo colors for selected color vision mode
+                colorFilter: _colorFilterForMode(_colorMode),
                 child: Image.asset(
                   'assets/nav_logo.png',
                   fit: BoxFit.contain,
@@ -964,7 +831,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                   style: TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.w600,
-                    color: Color(int.parse((palette['text'] ?? '#000000').replaceFirst('#', '0xff'))),
+                    color: Color(int.parse((_paletteForMode(_colorMode)['text'] ?? '#000000').replaceFirst('#', '0xff'))),
                   ),
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -979,24 +846,23 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   @override
   Widget build(BuildContext context) {
     final palette = _paletteForMode(_colorMode);
-    final navHex = palette['nav'] ?? '#1976d2'; // fallback blue
+    final navHex = palette['nav'] ?? '#1976d2';
     final navColor = Color(int.parse(navHex.replaceFirst('#', '0xff')));
 
     return Scaffold(
       appBar: AppBar(
-        // Ensure title has predictable spacing and doesn't get auto-centered/trimmed.
-        titleSpacing: 0, // allow title to start near the left edge
-        centerTitle: false, // left-align title (typical for large screens / Android)
-        leadingWidth: 56, // reserve standard space for a potential leading widget
-        toolbarHeight: 56, // consistent height for the AppBar
+        titleSpacing: 0,
+        centerTitle: false,
+        leadingWidth: 56,
+        toolbarHeight: 56,
         title: _buildLogoBrandButton(),
-        backgroundColor: navColor, // use palette nav color for AppBar background
+        backgroundColor: navColor,
         actions: [
-          // Responsive: show full actions on wide screens, collapse to a menu on narrow screens
           LayoutBuilder(
             builder: (context, constraints) {
               final double screenWidth = MediaQuery.of(context).size.width;
               final bool isPhone = screenWidth <= 600.0;
+              const topRightColor = Colors.white;
 
               if (!isPhone && constraints.maxWidth > 700) {
                 return Row(children: [
@@ -1005,36 +871,22 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                       final errors = _currentErrorsFromSources();
                       Navigator.push(context, MaterialPageRoute(builder: (_) => ErrorPage(entries: errors, persistedErrors: _errorLog)));
                     },
-                    child: Text('Errors', style: TextStyle(color: Color(int.parse((palette['text'] ?? '#ffffff').replaceFirst('#', '0xff'))))),
+                    child: const Text('Errors', style: TextStyle(color: topRightColor)),
                   ),
                   TextButton(
                     onPressed: () {
                       final logs = _currentLogFromSources();
                       Navigator.push(context, MaterialPageRoute(builder: (_) => LogPage(entries: logs, persistedLogs: _dailyLog)));
                     },
-                    child: Text('Log', style: TextStyle(color: Color(int.parse((palette['text'] ?? '#ffffff').replaceFirst('#', '0xff'))))),
+                    child: const Text('Log', style: TextStyle(color: topRightColor)),
                   ),
-                  IconButton(
-                    icon: Icon(Icons.settings, color: Color(int.parse((palette['text'] ?? '#ffffff').replaceFirst('#', '0xff')))),
-                    tooltip: 'Settings',
-                    onPressed: () => _openGlobalSettings(context),
-                  ),
-                  IconButton(
-                    onPressed: () async {
-                      await _clearPersistedAll();
-                    },
-                    icon: Icon(Icons.delete_sweep, color: Color(int.parse((palette['text'] ?? '#ffffff').replaceFirst('#', '0xff')))),
-                    tooltip: 'Clear persisted snapshot and logs',
-                  ),
-                  IconButton(
-                    onPressed: _logout, // now calls centralized logout handler (calls backend then local logout)
-                    icon: Icon(Icons.logout, color: Color(int.parse((palette['text'] ?? '#ffffff').replaceFirst('#', '0xff')))),
-                    tooltip: 'Logout',
-                  ),
+                  IconButton(icon: const Icon(Icons.settings, color: topRightColor), tooltip: 'Settings', onPressed: () => _openGlobalSettings(context)),
+                  IconButton(onPressed: () async => await _clearPersistedAll(), icon: const Icon(Icons.delete_sweep, color: topRightColor), tooltip: 'Clear persisted snapshot and logs'),
+                  IconButton(onPressed: _logout, icon: const Icon(Icons.logout, color: topRightColor), tooltip: 'Logout'),
                 ]);
               } else {
                 return PopupMenuButton<String>(
-                  icon: Icon(Icons.more_vert, color: Color(int.parse((palette['text'] ?? '#ffffff').replaceFirst('#', '0xff')))),
+                  icon: const Icon(Icons.more_vert, color: topRightColor),
                   onSelected: (value) async {
                     if (value == 'Errors') {
                       final errors = _currentErrorsFromSources();
@@ -1047,7 +899,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                     } else if (value == 'Clear') {
                       await _clearPersistedAll();
                     } else if (value == 'Logout') {
-                      await _logout(); // centralized logout call
+                      await _logout();
                     }
                   },
                   itemBuilder: (context) => const [
@@ -1102,32 +954,27 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                               final repKey = s['reportKey'] as String;
                               final connIcon = s['connectionIcon'] as IconData;
                               final repIcon = s['reportIcon'] as IconData;
-                              final connDetails = s['connectionDetails'] as String;
-                              final repDetails = s['reportDetails'] as String;
                               final lastConn = s['lastConnUpdated'] as String?;
                               final lastRep = s['lastRepUpdated'] as String?;
                               final isUpdConn = s['isUpdatingConn'] as bool? ?? false;
                               final isUpdRep = s['isUpdatingRep'] as bool? ?? false;
-                              final staleMinutesConn =
-                                  s['staleMinutesConn'] as int? ?? DEFAULT_STALE_MINUTES_CONN;
-                              final staleMinutesRep =
-                                  s['staleMinutesRep'] as int? ?? DEFAULT_STALE_MINUTES_REP;
 
-                              final connProgress = _computeProgressToStale(lastConn, staleMinutesConn, name);
-                              final repProgress = _computeProgressToStale(lastRep, staleMinutesRep, name);
+                              final c1 = Map<String, String>.from((s['C1'] as Map));
+                              final c2 = Map<String, String>.from((s['C2'] as Map));
+                              final c3 = Map<String, String>.from((s['C3'] as Map));
+                              final r1 = Map<String, dynamic>.from((s['R1'] as Map));
+                              final r2 = Map<String, dynamic>.from((s['R2'] as Map));
+                              final r3 = Map<String, dynamic>.from((s['R3'] as Map));
 
-                              // compute three checks for this source (conn / db / data)
-                              final three = _computeThreeChecksForSource(s);
-                              final connThree = three['conn']!;
-                              final dbThree = three['db']!;
-                              final dataThree = three['data']!;
+                              final r1Status = (r1['status'] ?? repKey).toString();
+                              final r2Status = (r2['status'] ?? repKey).toString();
+                              final r3Status = (r3['status'] ?? repKey).toString();
 
                               double pickOpacity(String key) {
                                 if (key == 'ok' || key == 'warning' || key == 'stale') return 1.0;
                                 return 0.25;
                               }
 
-                              // helper that builds three tiny bars that fit inside the button column width
                               Widget _buildThreeBarsForButton(String a, String b, String c) {
                                 return Row(
                                   children: [
@@ -1164,7 +1011,6 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                                 );
                               }
 
-                              // Now render the row with name, connection column and report column.
                               return Column(children: [
                                 Row(children: [
                                   SizedBox(
@@ -1179,14 +1025,18 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                                     ]),
                                   ),
 
-                                  // Connection column (three mini-bars above the button)
+                                  // Connection column
                                   Expanded(
                                     child: Column(children: [
                                       Padding(
                                         padding: const EdgeInsets.only(bottom: 6.0),
-                                        child: _buildThreeBarsForButton(connThree, dbThree, dataThree),
+                                        child: _buildThreeBarsForButton(
+                                          c1['database'] ?? connKey,
+                                          c1['api'] ?? connKey,
+                                          c1['socket'] ?? connKey,
+                                        ),
                                       ),
-                                      const SizedBox(height: 6), // keep spacing where the progress bar was
+                                      const SizedBox(height: 6),
                                       ElevatedButton(
                                         style: ElevatedButton.styleFrom(
                                           backgroundColor: Color(int.parse((palette['bgButton'] ?? '#ffffff').replaceFirst('#', '0xff'))),
@@ -1195,14 +1045,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                                           padding: const EdgeInsets.symmetric(vertical: 10),
                                         ),
                                         onPressed: () {
-                                          final List<String> failing = [];
-                                          if (connThree != 'ok') failing.add('Connection: ${connThree.toUpperCase()}');
-                                          if (dbThree != 'ok') failing.add('DB read: ${dbThree.toUpperCase()}');
-                                          if (dataThree != 'ok') failing.add('Data quality: ${dataThree.toUpperCase()}');
-
-                                          final info = failing.isEmpty ? connDetails : failing.join('\n');
-
-                                          _showDetailsDialog(context, '$name - Connection', info, connKey, lastConn, isUpdConn);
+                                          final pretty = _humanCDetails(c1, c2, c3);
+                                          _showDetailsDialog(context, '$name - Connection', pretty, connKey, lastConn, isUpdConn);
                                         },
                                         child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
                                           Icon(connIcon, color: _colorForKey(connKey)),
@@ -1217,14 +1061,14 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
                                   const SizedBox(width: 8),
 
-                                  // Report column (three mini-bars above the button)
+                                  // Report column
                                   Expanded(
                                     child: Column(children: [
                                       Padding(
                                         padding: const EdgeInsets.only(bottom: 6.0),
-                                        child: _buildThreeBarsForButton(connThree, dbThree, dataThree),
+                                        child: _buildThreeBarsForButton(r1Status, r2Status, r3Status),
                                       ),
-                                      const SizedBox(height: 6), // keep spacing where the progress bar was
+                                      const SizedBox(height: 6),
                                       ElevatedButton(
                                         style: ElevatedButton.styleFrom(
                                           backgroundColor: Color(int.parse((palette['bgButton'] ?? '#ffffff').replaceFirst('#', '0xff'))),
@@ -1233,14 +1077,15 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                                           padding: const EdgeInsets.symmetric(vertical: 10),
                                         ),
                                         onPressed: () {
-                                          final List<String> failing = [];
-                                          if (connThree != 'ok') failing.add('Connection: ${connThree.toUpperCase()}');
-                                          if (dbThree != 'ok') failing.add('DB read: ${dbThree.toUpperCase()}');
-                                          if (dataThree != 'ok') failing.add('Data quality: ${dataThree.toUpperCase()}');
-
-                                          final info = failing.isEmpty ? repDetails : failing.join('\n');
-
-                                          _showDetailsDialog(context, '$name - Report', info, repKey, lastRep, isUpdRep);
+                                          final r1Details = (s['R1'] as Map)['details']?.toString() ?? '';
+                                          final r2Details = (s['R2'] as Map)['details']?.toString() ?? '';
+                                          final infoMap = {
+                                            'R1 (Connections Report)': r1Details,
+                                            'R2 (Movement Report)': r2Details,
+                                            'R3 (Combined Report)': 'Status: $r3Status',
+                                          };
+                                          final pretty = _prettyJson(infoMap);
+                                          _showReportDialog(context, '$name - Report', pretty, repKey, lastRep, isUpdRep, infoMap);
                                         },
                                         child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
                                           Icon(repIcon, color: _colorForKey(repKey)),
@@ -1271,7 +1116,6 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     );
   }
 
-  // Legend explaining colors and icons.
   Widget _buildLegend() {
     final palette = _paletteForMode(_colorMode);
     return Container(
@@ -1295,42 +1139,79 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     return Row(children: [Icon(icon, color: color), const SizedBox(width: 6), Text(label)]);
   }
 
-  // Show a details dialog for connection/report with status and last update.
+  // Dialog showing connection details in readable form.
   void _showDetailsDialog(BuildContext context, String title, String content, String key, String? lastIso, bool isUpdating) {
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
         title: Row(children: [Text(title), const Spacer(), Icon(_iconForKey(key), color: _colorForKey(key))]),
-        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(content),
-          const SizedBox(height: 12),
-          Text('Last update: ${_formatTime(lastIso)}'),
-          if (isUpdating) ...[
-            const SizedBox(height: 6),
-            const Text('Status: Updating...', style: TextStyle(fontStyle: FontStyle.italic)),
-          ]
-        ]),
+        content: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            SelectableText(content),
+            const SizedBox(height: 12),
+            Text('Last update: ${_formatTime(lastIso)}'),
+            if (isUpdating) ...[
+              const SizedBox(height: 6),
+              const Text('Status: Updating...', style: TextStyle(fontStyle: FontStyle.italic)),
+            ]
+          ]),
+        ),
         actions: [TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Close'))],
       ),
     );
   }
 
-  // -----------------------
-  // Settings dialogs (global + per source)
-  // -----------------------
+  // Dialog showing report details with Copy option for R3.
+  // SelectableText is used so manual selection and copy is possible.
+  void _showReportDialog(BuildContext context, String title, String content, String key, String? lastIso, bool isUpdating, Map<String, dynamic> reportMap) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Row(children: [Text(title), const Spacer(), Icon(_iconForKey(key), color: _colorForKey(key))]),
+        content: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            // SelectableText allows manual highlight and copy.
+            SelectableText(content, minLines: 6),
+            const SizedBox(height: 12),
+            Text('Last update: ${_formatTime(lastIso)}'),
+            if (isUpdating) ...[
+              const SizedBox(height: 6),
+              const Text('Status: Updating...', style: TextStyle(fontStyle: FontStyle.italic)),
+            ]
+          ]),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Close')),
+          TextButton(onPressed: () {
+            // Copy full report to clipboard for easy paste into a file.
+            final pretty = _prettyJson(reportMap);
+            Clipboard.setData(ClipboardData(text: pretty));
+            Navigator.of(context).pop();
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Report copied to clipboard')));
+          }, child: const Text('Copy')),
+        ],
+      ),
+    );
+  }
 
-  // Per-source settings dialog: sliders + numeric input for thresholds and due time.
-  void _openPerSourceSettings(BuildContext context, String sourceName) {
-    final existing = _sourceSettings[sourceName];
-    int staleMinutesConn = existing != null && existing['staleMinutesConn'] is int ? existing['staleMinutesConn'] as int : DEFAULT_STALE_MINUTES_CONN;
-    int staleMinutesRep = existing != null && existing['staleMinutesRep'] is int ? existing['staleMinutesRep'] as int : DEFAULT_STALE_MINUTES_REP;
-    double variancePercent = existing != null && existing['variancePercent'] is num ? (existing['variancePercent'] as num).toDouble() : DEFAULT_VARIANCE_PERCENT;
-    int dueHour = existing != null && existing['reportDueHour'] is int ? existing['reportDueHour'] as int : 0;
-    int dueMinute = existing != null && existing['reportDueMinute'] is int ? existing['reportDueMinute'] as int : 0;
-    String treatStaleAsConn = existing != null && existing['treatStaleAsConn'] is String ? existing['treatStaleAsConn'] as String : 'stale';
-    String treatStaleAsRep = existing != null && existing['treatStaleAsRep'] is String ? existing['treatStaleAsRep'] as String : 'stale';
-    String treatMissing = existing != null && existing['treatMissingReportWhenConnOk'] is String ? existing['treatMissingReportWhenConnOk'] as String : 'warning';
+  // -----------------------
+  // 10) Settings dialogs (per-source + global)
+  // -----------------------
+  void _openPerSourceSettings(BuildContext context, String currentDisplayName) {
+    String canonicalKey = _sourceSettings.keys.firstWhere(
+      (k) => (_sourceSettings[k]?['displayName'] ?? k) == currentDisplayName,
+      orElse: () => currentDisplayName,
+    );
 
+    final existing = _sourceSettings[canonicalKey] ?? {};
+    String displayName = existing['displayName'] as String? ?? currentDisplayName;
+    int staleMinutesConn = existing['staleMinutesConn'] as int? ?? DEFAULT_STALE_MINUTES_CONN;
+    int staleMinutesRep = existing['staleMinutesRep'] as int? ?? DEFAULT_STALE_MINUTES_REP;
+    double variancePercent = (existing['variancePercent'] as num?)?.toDouble() ?? DEFAULT_VARIANCE_PERCENT;
+    int dueHour = existing['reportDueHour'] as int? ?? 0;
+    int dueMinute = existing['reportDueMinute'] as int? ?? 0;
+
+    final displayNameCtrl = TextEditingController(text: displayName);
     final connTextCtrl = TextEditingController(text: staleMinutesConn.toString());
     final repTextCtrl = TextEditingController(text: staleMinutesRep.toString());
     final varTextCtrl = TextEditingController(text: variancePercent.toStringAsFixed(0));
@@ -1355,10 +1236,17 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       builder: (ctx) {
         return StatefulBuilder(builder: (ctx, setD) {
           return AlertDialog(
-            title: Text('$sourceName settings'),
+            title: const Text('Source Settings'),
             content: SingleChildScrollView(
               child: Column(mainAxisSize: MainAxisSize.min, children: [
-                const SizedBox(height: 4),
+                Align(alignment: Alignment.centerLeft, child: const Text('Display name', style: TextStyle(fontWeight: FontWeight.bold))),
+                const SizedBox(height: 6),
+                TextField(
+                  controller: displayNameCtrl,
+                  decoration: const InputDecoration(isDense: true, border: OutlineInputBorder(), hintText: 'Source display name'),
+                  onChanged: (v) => setD(() => displayName = v),
+                ),
+                const SizedBox(height: 12),
                 Align(alignment: Alignment.centerLeft, child: const Text('Connection stale threshold (min)', style: TextStyle(fontWeight: FontWeight.bold))),
                 Row(children: [
                   Expanded(
@@ -1386,15 +1274,6 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                       onSubmitted: (_) => setD(_parseAndClamp),
                       onChanged: (_) => setD(_parseAndClamp),
                     ),
-                  ),
-                ]),
-                Row(children: [
-                  const Text('Treat stale as: '),
-                  const SizedBox(width: 8),
-                  DropdownButton<String>(
-                    value: treatStaleAsConn,
-                    items: ['ok', 'stale', 'warning', 'error'].map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
-                    onChanged: (v) => setD(() => treatStaleAsConn = v ?? 'stale'),
                   ),
                 ]),
                 const SizedBox(height: 12),
@@ -1460,59 +1339,64 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                 const SizedBox(height: 12),
                 Align(alignment: Alignment.centerLeft, child: const Text('Report due time (local)', style: TextStyle(fontWeight: FontWeight.bold))),
                 Row(children: [
-                  Expanded(
-                    child: Row(children: [
-                      SizedBox(
-                        width: 80,
-                        child: TextField(
-                          controller: dueHourCtrl,
-                          keyboardType: TextInputType.number,
-                          decoration: const InputDecoration(isDense: true, border: OutlineInputBorder(), labelText: 'Hour'),
-                          onSubmitted: (_) => setD(_parseAndClamp),
-                          onChanged: (_) => setD(_parseAndClamp),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      SizedBox(
-                        width: 80,
-                        child: TextField(
-                          controller: dueMinuteCtrl,
-                          keyboardType: TextInputType.number,
-                          decoration: const InputDecoration(isDense: true, border: OutlineInputBorder(), labelText: 'Min'),
-                          onSubmitted: (_) => setD(_parseAndClamp),
-                          onChanged: (_) => setD(_parseAndClamp),
-                        ),
-                      ),
-                    ]),
+                  SizedBox(
+                    width: 80,
+                    child: TextField(
+                      controller: dueHourCtrl,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(isDense: true, border: OutlineInputBorder(), labelText: 'Hour'),
+                      onSubmitted: (_) => setD(_parseAndClamp),
+                      onChanged: (_) => setD(_parseAndClamp),
+                    ),
                   ),
-                ]),
-                const SizedBox(height: 12),
-                Row(children: [
-                  const Text('Missing report when conn OK: '),
                   const SizedBox(width: 8),
-                  DropdownButton<String>(
-                    value: treatMissing,
-                    items: ['ok', 'warning', 'error'].map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
-                    onChanged: (v) => setD(() => treatMissing = v ?? 'warning'),
+                  SizedBox(
+                    width: 80,
+                    child: TextField(
+                      controller: dueMinuteCtrl,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(isDense: true, border: OutlineInputBorder(), labelText: 'Min'),
+                      onSubmitted: (_) => setD(_parseAndClamp),
+                      onChanged: (_) => setD(_parseAndClamp),
+                    ),
                   ),
                 ]),
               ]),
             ),
             actions: [
               TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel')),
-              TextButton(onPressed: () {
+              TextButton(onPressed: () async {
                 _parseAndClamp();
-                _sourceSettings[sourceName] = {
+
+                _sourceSettings[canonicalKey] = {
+                  'displayName': displayNameCtrl.text.trim().isEmpty ? canonicalKey : displayNameCtrl.text.trim(),
                   'staleMinutesConn': staleMinutesConn,
                   'staleMinutesRep': staleMinutesRep,
                   'variancePercent': variancePercent,
                   'reportDueHour': dueHour,
                   'reportDueMinute': dueMinute,
-                  'treatStaleAsConn': treatStaleAsConn,
-                  'treatStaleAsRep': treatStaleAsRep,
-                  'treatMissingReportWhenConnOk': treatMissing,
                 };
-                _saveSettingsPrefs();
+
+                final newDisplay = _sourceSettings[canonicalKey]!['displayName'] as String;
+                for (int i = 0; i < sources.length; i++) {
+                  if (sources[i]['name'] == currentDisplayName) {
+                    final s = Map<String, dynamic>.from(sources[i]);
+                    s['name'] = newDisplay;
+                    if (s.containsKey('C1')) {
+                      final c1 = Map<String, String>.from(s['C1'] as Map);
+                      final oldStatus = (s['R1'] as Map?)?['status'] ?? 'ok';
+                      s['R1'] = {'status': oldStatus, 'details': _buildR1Details(newDisplay, c1)};
+                    }
+                    if (s.containsKey('C2')) {
+                      final c2 = Map<String, String>.from(s['C2'] as Map);
+                      final oldStatus = (s['R2'] as Map?)?['status'] ?? 'ok';
+                      s['R2'] = {'status': oldStatus, 'details': _buildR2Details(newDisplay, c2)};
+                    }
+                    sources[i] = s;
+                  }
+                }
+
+                await _saveSettingsPrefs();
                 Navigator.of(ctx).pop();
                 setState(() {});
               }, child: const Text('Save')),
@@ -1523,18 +1407,15 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     );
   }
 
-  // Global settings dialog for refresh interval and color-vision selector.
   void _openGlobalSettings(BuildContext context) {
     int refreshSeconds = _refreshSeconds;
     final refreshCtrl = TextEditingController(text: refreshSeconds.toString());
 
-    ColorVisionMode selectedMode = _colorMode; // local copy for dialog
+    ColorVisionMode selectedMode = _colorMode;
 
     void _parseRefresh() {
       final r = int.tryParse(refreshCtrl.text);
-      if (r != null) {
-        refreshSeconds = r.clamp(5, 3600);
-      }
+      if (r != null) refreshSeconds = r.clamp(5, 3600);
     }
 
     showDialog(
@@ -1575,29 +1456,22 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                 ),
               ]),
               const SizedBox(height: 12),
-              // Color-vision selector: changes the UI palette and logo filter
               Align(alignment: Alignment.centerLeft, child: const Text('Color Vision Mode', style: TextStyle(fontWeight: FontWeight.bold))),
               const SizedBox(height: 6),
               DropdownButton<ColorVisionMode>(
                 value: selectedMode,
                 isExpanded: true,
-                items: ColorVisionMode.values
-                    .map((m) => DropdownMenuItem(value: m, child: Text(m.toString().split('.').last)))
-                    .toList(),
+                items: ColorVisionMode.values.map((m) => DropdownMenuItem(value: m, child: Text(m.toString().split('.').last))).toList(),
                 onChanged: (v) {
                   setD(() {
                     selectedMode = v ?? ColorVisionMode.Original;
-                    // update a preview: setState on outer to preview immediately
                     _colorMode = selectedMode;
-                    _saveSettingsPrefs(); // persist selection as preview is immediate
+                    _saveSettingsPrefs();
                   });
                 },
               ),
               const SizedBox(height: 8),
-              const Text(
-                'Select a color-vision mode to adapt the UI palette and logo so users with color deficiencies can better distinguish statuses.',
-                style: TextStyle(fontSize: 12),
-              ),
+              const Text('Updates: periodic polling is used for web builds.', style: TextStyle(fontSize: 12)),
             ]),
             actions: [
               TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel')),
@@ -1618,47 +1492,293 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   }
 
   // -----------------------
-  // Compute three simplified checks for the UI: connection, db, and data-quality.
+  // 11) Error and Log helpers and pages
   // -----------------------
-  Map<String, String> _computeThreeChecksForSource(Map<String, dynamic> s) {
-    final name = s['name'] as String;
-    final connKey = s['connectionKey'] as String? ?? 'down';
-    final repKey = s['reportKey'] as String? ?? 'warning';
-    final reportValue = s['reportValue'];
+  List<Map<String, String>> _currentErrorsFromSources() {
+    final List<Map<String, String>> list = [];
+    final now = DateTime.now().toIso8601String();
 
-    String connCheck = connKey;
-    String dbCheck = 'down';
-    String dataCheck = repKey;
+    for (var s in sources) {
+      final name = s['name'] as String;
+      final connKey = s['connectionKey'] as String;
+      final repKey = s['reportKey'] as String;
+      final connDetails = s['connectionDetails'] as String;
+      final repDetails = s['reportDetails'] as String;
 
-    if (name == 'Source A' || name == 'Source B') {
-      // For mock sources: simulate DB check from connection/report keys.
-      if (connCheck == 'down' || connCheck == 'error') {
-        dbCheck = connCheck;
-      } else {
-        dbCheck = (repKey == 'error') ? 'error' : (repKey == 'warning' ? 'warning' : 'ok');
+      if (connKey == 'error' || connKey == 'down') {
+        list.add({'time': now, 'description': '$name connection: $connDetails', 'status': connKey.toUpperCase()});
       }
-    } else {
-      // For Sources C/D use connection key as DB check placeholder.
-      // Backend: replace this with a separate DB/read probe if available.
-      dbCheck = connKey;
+      if ((repKey == 'error' || repKey == 'down') && !(connKey == 'ok' || connKey == 'stale')) {
+        list.add({'time': now, 'description': '$name report: $repDetails', 'status': repKey.toUpperCase()});
+      }
     }
 
-    // Data quality check: if reportKey is ok but no numeric value, warn.
-    if (repKey == 'ok') {
-      dataCheck = (reportValue == null) ? 'warning' : 'ok';
-    } else {
-      dataCheck = repKey;
-    }
+    return list;
+  }
 
-    return {'conn': connCheck, 'db': dbCheck, 'data': dataCheck};
+  List<Map<String, String>> _currentLogFromSources() {
+    final List<Map<String, String>> list = [];
+    final now = DateTime.now().toIso8601String();
+
+    for (var s in sources) {
+      final name = s['name'] as String;
+      final connKey = s['connectionKey'] as String;
+      final repKey = s['reportKey'] as String;
+      list.add({'time': now, 'description': '$name - conn:$connKey rep:$repKey', 'status': 'VIEW'});
+    }
+    return list;
+  }
+
+  // -----------------------
+  // 12) Logout handling
+  // -----------------------
+  Future<void> _logout() async {
+    try {
+      await http.get(Uri.parse(_logoutEndpoint), headers: {'Accept': 'application/json'}).timeout(const Duration(seconds: 6));
+    } catch (_) {}
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('loggedIn', false);
+    if (!mounted) return;
+    Navigator.pushAndRemoveUntil(context, MaterialPageRoute(builder: (context) => const LoginPage()), (Route<dynamic> route) => false);
+  }
+
+  // -----------------------
+  // 13) Color palettes and filters
+  // -----------------------
+  Map<String, String> _paletteForMode(ColorVisionMode mode) {
+    switch (mode) {
+      case ColorVisionMode.Protanopia:
+        return {
+          'ok': '#2b83ba',
+          'warning': '#fdae61',
+          'error': '#000000',
+          'stale': '#9e9e9e',
+          'down': '#5e4fa2',
+          'nav': '#1f78b4',
+          'navBorder': '#174e74',
+          'bg': '#ffffff',
+          'text': '#0b1720',
+          'bgButton': '#ffffff',
+          'buttonBorder': '#cfd8dc',
+        };
+      case ColorVisionMode.Deuteranopia:
+        return {
+          'ok': '#377eb8',
+          'warning': '#ff7f00',
+          'error': '#000000',
+          'stale': '#9e9e9e',
+          'down': '#984ea3',
+          'nav': '#256aa8',
+          'navBorder': '#1f527f',
+          'bg': '#ffffff',
+          'text': '#07121a',
+          'bgButton': '#ffffff',
+          'buttonBorder': '#cfd8dc',
+        };
+      case ColorVisionMode.Tritanopia:
+        return {
+          'ok': '#0072b2',
+          'warning': '#fdc086',
+          'error': '#000000',
+          'stale': '#9e9e9e',
+          'down': '#7f7f7f',
+          'nav': '#0b5f8a',
+          'navBorder': '#083e57',
+          'bg': '#ffffff',
+          'text': '#07121a',
+          'bgButton': '#ffffff',
+          'buttonBorder': '#cfd8dc',
+        };
+      case ColorVisionMode.Protanomaly:
+        return {
+          'ok': '#2f78b4',
+          'warning': '#f6a254',
+          'error': '#6f1f1f',
+          'stale': '#9e9e9e',
+          'down': '#6a52a3',
+          'nav': '#2a5e92',
+          'navBorder': '#1f425f',
+          'bg': '#ffffff',
+          'text': '#0b1720',
+          'bgButton': '#ffffff',
+          'buttonBorder': '#cfd8dc',
+        };
+      case ColorVisionMode.Deuteranomaly:
+        return {
+          'ok': '#2f78b4',
+          'warning': '#f6a254',
+          'error': '#5a1d1d',
+          'stale': '#9e9e9e',
+          'down': '#6a52a3',
+          'nav': '#2a5e92',
+          'navBorder': '#1f425f',
+          'bg': '#ffffff',
+          'text': '#0b1720',
+          'bgButton': '#ffffff',
+          'buttonBorder': '#cfd8dc',
+        };
+      case ColorVisionMode.Tritanomaly:
+        return {
+          'ok': '#2b7fb8',
+          'warning': '#f7c77c',
+          'error': '#5b2727',
+          'stale': '#9e9e9e',
+          'down': '#6b6b6b',
+          'nav': '#25678f',
+          'navBorder': '#183f57',
+          'bg': '#ffffff',
+          'text': '#07121a',
+          'bgButton': '#ffffff',
+          'buttonBorder': '#cfd8dc',
+        };
+      case ColorVisionMode.Achromatopsia:
+        return {
+          'ok': '#4f4f4f',
+          'warning': '#8a8a8a',
+          'error': '#1f1f1f',
+          'stale': '#bdbdbd',
+          'down': '#6b6b6b',
+          'nav': '#2f2f2f',
+          'navBorder': '#1f1f1f',
+          'bg': '#ffffff',
+          'text': '#000000',
+          'bgButton': '#ffffff',
+          'buttonBorder': '#cfcfcf',
+        };
+      case ColorVisionMode.Original:
+      default:
+        return {
+          'ok': '#2e7d32',
+          'warning': '#ff9800',
+          'error': '#d32f2f',
+          'stale': '#9e9e9e',
+          'down': '#6a1b9a',
+          'nav': '#1976d2',
+          'navBorder': '#145ea8',
+          'bg': '#ffffff',
+          'text': '#000000',
+          'bgButton': '#ffffff',
+          'buttonBorder': '#cfd8dc',
+        };
+    }
+  }
+
+  ColorFilter _colorFilterForMode(ColorVisionMode mode) {
+    const identity = <double>[
+      1, 0, 0, 0, 0,
+      0, 1, 0, 0, 0,
+      0, 0, 1, 0, 0,
+      0, 0, 0, 1, 0,
+    ];
+    const blueBoost = <double>[
+      0.7, 0.1, 0.2, 0, 0,
+      0.1, 0.8, 0.1, 0, 0,
+      0.05, 0.05, 0.9, 0, 0,
+      0, 0, 0, 1, 0,
+    ];
+    const desaturate = <double>[
+      0.6, 0.25, 0.15, 0, 0,
+      0.2, 0.6, 0.2, 0, 0,
+      0.15, 0.25, 0.6, 0, 0,
+      0, 0, 0, 1, 0,
+    ];
+    const greyscale = <double>[
+      0.2126, 0.7152, 0.0722, 0, 0,
+      0.2126, 0.7152, 0.0722, 0, 0,
+      0.2126, 0.7152, 0.0722, 0, 0,
+      0, 0, 0, 1, 0,
+    ];
+
+    switch (mode) {
+      case ColorVisionMode.Protanopia:
+      case ColorVisionMode.Deuteranopia:
+        return const ColorFilter.matrix(blueBoost);
+      case ColorVisionMode.Protanomaly:
+      case ColorVisionMode.Deuteranomaly:
+      case ColorVisionMode.Tritanomaly:
+        return const ColorFilter.matrix(desaturate);
+      case ColorVisionMode.Tritanopia:
+        return const ColorFilter.matrix(blueBoost);
+      case ColorVisionMode.Achromatopsia:
+        return const ColorFilter.matrix(greyscale);
+      case ColorVisionMode.Original:
+      default:
+        return const ColorFilter.matrix(identity);
+    }
+  }
+
+  // -----------------------
+  // 14) Utility functions
+  // -----------------------
+  String _formatTime(String? iso) {
+    if (iso == null) return 'never';
+    final dt = DateTime.tryParse(iso);
+    if (dt == null) return 'unknown';
+    return '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}:${dt.second.toString().padLeft(2, '0')}';
+  }
+
+  Future<void> _evaluateAndPersistChanges() async {
+    try {
+      final snapshot = <String, dynamic>{};
+      for (var s in sources) {
+        snapshot[s['name']] = {
+          'connectionKey': s['connectionKey'],
+          'reportKey': s['reportKey'],
+          'reportValue': s['reportValue'],
+        };
+      }
+
+      _dailyLog.add({
+        'time': DateTime.now().toIso8601String(),
+        'description': 'Updated ${sources.length} sources',
+        'status': 'UPDATE',
+      });
+
+      await _saveOldSnapshot(snapshot);
+      await _savePersistedLogs();
+    } catch (_) {}
+  }
+
+  Map<String, dynamic> _mapProbeToKeysAndValue(
+      String sourceName, Map<String, dynamic>? probeBody, String probeStatus) {
+    final connKey = probeStatus;
+    String repKey = probeStatus;
+    double? reportValue;
+    try {
+      if (sourceName.contains('Source C')) {
+        if (probeBody != null &&
+            probeBody['current_weather'] != null &&
+            probeBody['current_weather']['temperature'] != null) {
+          repKey = 'ok';
+          final tmp = probeBody['current_weather']['temperature'];
+          if (tmp is num) reportValue = tmp.toDouble();
+        } else {
+          repKey = 'warning';
+        }
+      } else if (sourceName.contains('Source D')) {
+        if (probeBody != null && probeBody['features'] is List && (probeBody['features'] as List).isNotEmpty) {
+          final f = (probeBody['features'] as List).first;
+          if (f is Map && f['properties'] is Map && f['properties']['mag'] != null) {
+            repKey = 'ok';
+            final m = f['properties']['mag'];
+            if (m is num) reportValue = m.toDouble();
+          } else {
+            repKey = 'warning';
+          }
+        } else {
+          repKey = 'warning';
+        }
+      }
+    } catch (_) {
+      repKey = 'error';
+    }
+    return {'connection': connKey, 'report': repKey, 'value': reportValue};
   }
 }
 
 // -----------------------
-// Error and Log Pages
+// Error and Log pages
 // -----------------------
-
-// ErrorPage: shows current view and persisted history.
 class ErrorPage extends StatelessWidget {
   final List<Map<String, String>> entries;
   final List<Map<String, String>> persistedErrors;
@@ -1716,7 +1836,6 @@ class ErrorPage extends StatelessWidget {
   }
 }
 
-// LogPage: shows current and persisted logs.
 class LogPage extends StatelessWidget {
   final List<Map<String, String>> entries;
   final List<Map<String, String>> persistedLogs;
@@ -1770,216 +1889,4 @@ class LogPage extends StatelessWidget {
       ),
     );
   }
-}
-
-// -----------------------
-// Logout handling (added)
-// -----------------------
-
-// Centralized logout: try backend /logout then always perform local logout/navigation.
-// This keeps app behaviour consistent and avoids duplicated inline logout logic.
-extension on _HomePageState {
-  Future<void> _logout() async {
-    try {
-      // Attempt to notify backend; failures/timeouts are ignored and local logout proceeds.
-      await http.get(Uri.parse(_logoutEndpoint), headers: {'Accept': 'application/json'}).timeout(const Duration(seconds: 6));
-    } catch (_) {
-      // swallow network errors/timeouts
-    } finally {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool('loggedIn', false);
-      if (!mounted) return;
-      Navigator.pushAndRemoveUntil(
-        context,
-        MaterialPageRoute(builder: (context) => const LoginPage()),
-        (Route<dynamic> route) => false,
-      );
-    }
-  }
-}
-
-// -----------------------
-// Color vision / palette helpers (improved)
-// -----------------------
-
-// Returns a palette mapping status keys to hex colors for a given color-vision mode.
-// Palettes include 'nav' (AppBar), 'navBorder', 'bg', 'text', 'bgButton', 'buttonBorder', plus status colors.
-Map<String, String> _paletteForMode(ColorVisionMode mode) {
-  // Each palette defines: ok, warning, error, stale, down, nav, navBorder, bg, text, bgButton, buttonBorder
-  // Colors chosen to be more distinguishable per accessible palettes and common recommendations.
-  switch (mode) {
-    case ColorVisionMode.Protanopia:
-      return {
-        'ok': '#2b83ba', // blue
-        'warning': '#fdae61', // orange
-        'error': '#000000', // choose black/dark for critical (safer)
-        'stale': '#9e9e9e',
-        'down': '#5e4fa2', // purple
-        'nav': '#1f78b4',
-        'navBorder': '#174e74',
-        'bg': '#ffffff',
-        'text': '#0b1720',
-        'bgButton': '#ffffff',
-        'buttonBorder': '#cfd8dc',
-      };
-    case ColorVisionMode.Deuteranopia:
-      return {
-        'ok': '#377eb8', // blue
-        'warning': '#ff7f00', // orange
-        'error': '#000000', // black for clarity
-        'stale': '#9e9e9e',
-        'down': '#984ea3', // purple
-        'nav': '#256aa8',
-        'navBorder': '#1f527f',
-        'bg': '#ffffff',
-        'text': '#07121a',
-        'bgButton': '#ffffff',
-        'buttonBorder': '#cfd8dc',
-      };
-    case ColorVisionMode.Tritanopia:
-      return {
-        'ok': '#0072b2', // deep blue
-        'warning': '#fdc086', // tan/orange
-        'error': '#000000', // black for clarity
-        'stale': '#9e9e9e',
-        'down': '#7f7f7f',
-        'nav': '#0b5f8a',
-        'navBorder': '#083e57',
-        'bg': '#ffffff',
-        'text': '#07121a',
-        'bgButton': '#ffffff',
-        'buttonBorder': '#cfd8dc',
-      };
-    case ColorVisionMode.Protanomaly:
-      return {
-        'ok': '#2f78b4', // slightly desaturated blue
-        'warning': '#f6a254', // orange
-        'error': '#6f1f1f', // dark maroon vs bright red for contrast
-        'stale': '#9e9e9e',
-        'down': '#6a52a3',
-        'nav': '#2a5e92',
-        'navBorder': '#1f425f',
-        'bg': '#ffffff',
-        'text': '#0b1720',
-        'bgButton': '#ffffff',
-        'buttonBorder': '#cfd8dc',
-      };
-    case ColorVisionMode.Deuteranomaly:
-      return {
-        'ok': '#2f78b4',
-        'warning': '#f6a254',
-        'error': '#5a1d1d', // darker for visibility
-        'stale': '#9e9e9e',
-        'down': '#6a52a3',
-        'nav': '#2a5e92',
-        'navBorder': '#1f425f',
-        'bg': '#ffffff',
-        'text': '#0b1720',
-        'bgButton': '#ffffff',
-        'buttonBorder': '#cfd8dc',
-      };
-    case ColorVisionMode.Tritanomaly:
-      return {
-        'ok': '#2b7fb8',
-        'warning': '#f7c77c',
-        'error': '#5b2727',
-        'stale': '#9e9e9e',
-        'down': '#6b6b6b',
-        'nav': '#25678f',
-        'navBorder': '#183f57',
-        'bg': '#ffffff',
-        'text': '#07121a',
-        'bgButton': '#ffffff',
-        'buttonBorder': '#cfd8dc',
-      };
-    case ColorVisionMode.Achromatopsia:
-      // Greyscale palette for complete color blindness
-      return {
-        'ok': '#4f4f4f',
-        'warning': '#8a8a8a',
-        'error': '#1f1f1f',
-        'stale': '#bdbdbd',
-        'down': '#6b6b6b',
-        'nav': '#2f2f2f',
-        'navBorder': '#1f1f1f',
-        'bg': '#ffffff',
-        'text': '#000000',
-        'bgButton': '#ffffff',
-        'buttonBorder': '#cfcfcf',
-      };
-    case ColorVisionMode.Original:
-    default:
-      // Original/default palette used previously
-      return {
-        'ok': '#2e7d32', // green
-        'warning': '#ff9800', // orange
-        'error': '#d32f2f', // red
-        'stale': '#9e9e9e', // grey
-        'down': '#6a1b9a', // purple
-        'nav': '#1976d2', // original blue
-        'navBorder': '#145ea8',
-        'bg': '#ffffff',
-        'text': '#000000',
-        'bgButton': '#ffffff',
-        'buttonBorder': '#cfd8dc',
-      };
-  }
-}
-
-// Build a ColorFilter matrix for the given ColorVisionMode suitable for ColorFiltered.
-ColorFilter _colorFilterForMode(ColorVisionMode mode) {
-  // Identity (no change)
-  const identity = <double>[
-    1, 0, 0, 0, 0, //
-    0, 1, 0, 0, 0, //
-    0, 0, 1, 0, 0, //
-    0, 0, 0, 1, 0, //
-  ];
-
-  // Boost blue / reduce red to help protan/deutan users differentiate
-  const blueBoost = <double>[
-    0.7, 0.1, 0.2, 0, 0, //
-    0.1, 0.8, 0.1, 0, 0, //
-    0.05, 0.05, 0.9, 0, 0, //
-    0, 0, 0, 1, 0, //
-  ];
-
-  // Mild desaturate and contrast (for anomalous types)
-  const desaturate = <double>[
-    0.6, 0.25, 0.15, 0, 0, //
-    0.2, 0.6, 0.2, 0, 0, //
-    0.15, 0.25, 0.6, 0, 0, //
-    0, 0, 0, 1, 0, //
-  ];
-
-  // Greyscale matrix for achromatopsia
-  const greyscale = <double>[
-    0.2126, 0.7152, 0.0722, 0, 0, //
-    0.2126, 0.7152, 0.0722, 0, 0, //
-    0.2126, 0.7152, 0.0722, 0, 0, //
-    0, 0, 0, 1, 0, //
-  ];
-
-  switch (mode) {
-    case ColorVisionMode.Protanopia:
-    case ColorVisionMode.Deuteranopia:
-      return const ColorFilter.matrix(blueBoost);
-    case ColorVisionMode.Protanomaly:
-    case ColorVisionMode.Deuteranomaly:
-    case ColorVisionMode.Tritanomaly:
-      return const ColorFilter.matrix(desaturate);
-    case ColorVisionMode.Tritanopia:
-      return const ColorFilter.matrix(blueBoost);
-    case ColorVisionMode.Achromatopsia:
-      return const ColorFilter.matrix(greyscale);
-    case ColorVisionMode.Original:
-    default:
-      return const ColorFilter.matrix(identity);
-  }
-}
-
-// Helper: convert hex string like "#rrggbb" to Color
-Color _hexToColor(String hex) {
-  final cleaned = hex.replaceFirst('#', '');
-  return Color(int.parse('ff$cleaned', radix: 16));
 }
