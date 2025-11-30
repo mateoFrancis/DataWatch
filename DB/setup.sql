@@ -8,6 +8,6 @@ Show procedure status where Db = 'datawatch';
 
 Show tables;
 
---\! python3 /srv/shared/DataWatch/setup.py
+\! python3 /srv/shared/DataWatch/setup.py
 
 SET foreign_key_checks = 1;

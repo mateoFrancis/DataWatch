@@ -2,72 +2,115 @@
 
 import requests
 from datetime import datetime
-import pytz 
+import pytz
 
-def fetch_weather(zip_codes):
+import sys
+sys.path.append("/srv/shared/DataWatch")
+import tools
 
-    records = []
+system_user_id = 1
 
-    api_key = "a2344ccdb157cfc507fc6589b8a7893a" # to be stored in DB
-    country_code = "US"
+def run_weather_sync_job():
 
-    lat = 34.0239
-    lon = -118.172
-    city_id = "5344994"
-    pst = pytz.timezone("America/Los_Angeles") 
+    try:
 
-    for zip_code in zip_codes:
-      
-        url = f"https://api.openweathermap.org/data/2.5/weather?zip={zip_code},{country_code}&appid={api_key}&units=imperial"
-        #url = f"https://api.openweathermap.org/data/2.5/weather?id={city_id}&appid={api_key}"
+        # get source data
+        source = tools.get_data_source_by_name("OpenWeather")
+        base_url = source["base_url"]
+        api_key = source["api_key"]
+        source_id = source["source_id"]
+
+        # api call started
+        api_call_id = tools.log_api_call(
+            source_id = source_id,
+            user_id = system_user_id,
+            call_type = "weather",
+            status = "STARTED"
+        )
+
+        # get all locations (zip codes)
+        locations = tools.get_all_locations()
+
+        pst = pytz.timezone("America/Los_Angeles")
         
-        #url = f"https://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={api_key}"
-        
-        try:
-      
-            response = requests.get(url)
-            response.raise_for_status()
-            data = response.json()    # json directly
-            #records.append(data)      # store it
+        success_count = 0
+        failure_count = 0
 
-            temp = data.get("main", {}).get("temp")
-            humidity = data.get("main", {}).get("humidity")
-            wind_speed = data.get("wind", {}).get("speed")
-            dt_utc = datetime.utcfromtimestamp(data.get("dt"))
-            dt_pst = dt_utc.replace(tzinfo=pytz.utc).astimezone(pst)
+        for loc in locations:
 
-            record = {
-                "p_temperature": temp,
-                "p_humidity": humidity,
-                "p_wind_speed": wind_speed,
-                "p_recorded_at": dt_pst.strftime("%Y-%m-%d %H:%M:%S")
+            location_id = loc["location_id"]
+            zip_code = loc["zip_code"]
+
+            params = {
+                "zip": f"{zip_code},US",
+                "appid": api_key,
+                "units": "imperial"
             }
 
-            records.append(record)
-      
-        except requests.RequestException as e:
-            print(f"Request Error for {zip_code}: {e}")
+            try:
+                response = requests.get(base_url, params=params, timeout=10)
+                response.raise_for_status()
+                data = response.json()
 
-    return records  # return list of JSON objects
+                temp = data.get("main", {}).get("temp")
+                humidity = data.get("main", {}).get("humidity")
+                wind_speed = data.get("wind", {}).get("speed")
+
+                # convert timestamp
+                dt_utc = datetime.utcfromtimestamp(data["dt"])
+                dt_pst = dt_utc.replace(tzinfo=pytz.utc).astimezone(pst)
+                recorded_at = dt_pst.strftime("%Y-%m-%d %H:%M:%S")
+
+                # insert weather data
+                tools.insert_weather_data(
+                    source_id,
+                    location_id,
+                    system_user_id,
+                    temp,
+                    humidity,
+                    wind_speed,
+                    recorded_at,
+                    api_call_id
+                )
+
+                success_count += 1
+
+            except Exception as e:
+
+                failure_count += 1
+
+                tools.log_weather_error(
+                    call_id = api_call_id,
+                    error_type = "WeatherFetchError",
+                    error_message = f"Location {location_id}: {str(e)}"
+                )
 
 
-zip_codes = ["90001", "10001"]  # LA and NY
-weather_data = fetch_weather(zip_codes)
+        # determine final status
+        final_status = "SUCCESS" if failure_count == 0 else (
+            "FAILED" if success_count == 0 else "PARTIAL"
+        )
 
-for record in weather_data:
-    print(record)
+        final_message = f"Completed: success={success_count}, failed={failure_count}"
 
+       # print(f"[API CALL {api_call_id}] {final_message}")
 
+        tools.update_api_call_status(
+            call_id = api_call_id,
+            status = final_status
+        )
 
-"""
-# later user
-params = {
-    "zip": "90210,US",
-    "appid": data_source_row["api_key"],
-    "units": "imperial"
-}
+        return "\nWeather sync completed"
 
-# request handles url encoding
-response = requests.get(data_source_row["base_url"], params=params) 
+    except Exception as fatal_error:
 
-"""
+        # fatal failure
+        tools.update_api_call_status(
+            call_id = api_call_id,
+            status = "FAILED"
+        )
+        return "Weather sync failed"
+    
+
+#if __name__ == "__main__":
+    #print(run_weather_sync_job())

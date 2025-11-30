@@ -5,6 +5,19 @@ import sys
 from datetime import datetime
 import pytz  # timezone
 
+
+def verify_login(data):
+   return 0 
+
+
+
+
+
+
+
+
+
+
 def get_time():
 
     pst = pytz.timezone("America/Los_Angeles")  # local time
@@ -134,7 +147,7 @@ def insert_weather_data(source_id, location_id, user_id, temperature, humidity, 
             weather_id = row[0]
 
         conn.commit()
-        print(f"\n[insert_weather_data] New weather_id = {weather_id}")
+        #print(f"\n[insert_weather_data] New weather_id = {weather_id}")
 
     finally:
         cur.close()
@@ -300,6 +313,42 @@ def update_api_call_status(call_id, status):
         conn.close()
 
     return affected
+
+def get_data_source_by_name(name):
+   
+    conn = get_connection()
+    source = None
+
+    try:
+
+        cur = conn.cursor(dictionary=True)
+        cur.execute("select * from data_sources where name = ?", (name,))
+        source = cur.fetchone()
+
+    finally:
+
+        cur.close()
+        conn.close()
+
+    return source
+
+def get_all_locations():
+
+    conn = get_connection()
+    locations = []
+
+    try:
+
+        cur = conn.cursor(dictionary=True)
+        cur.execute("select * from locations")
+        locations = cur.fetchall()
+    
+    finally:
+        cur.close()
+        conn.close()
+
+    return locations
+
 
 
 #------------------------------#
