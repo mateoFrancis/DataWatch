@@ -5,7 +5,7 @@ import tools
 
 # add test user
 try:
-    tools.add_user("John Doe", "John@gmail.com", "password123")
+    tools.add_user("system", "system@datawatch.local", "systemAdmin")
 except Exception as e:
     print(f"[setup] User already exists or error: {e}")
 
@@ -23,7 +23,7 @@ except Exception as e:
 
 
 # add locations
-zip_codes = ["90210", "10001", "60601"]
+##zip_codes = ["90210", "10001", "60601"]
 
 locations_info = [
     {"city": "Beverly Hills", "country": "US", "lat": 34.0736, "lon": -118.4004, "zip_code": "90210"},
