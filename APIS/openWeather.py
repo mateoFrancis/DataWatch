@@ -10,6 +10,12 @@ import tools
 
 system_user_id = 1
 
+try:
+    from app import socketio
+except:
+    socketio = None
+
+
 def run_weather_sync_job():
 
     try:
@@ -91,14 +97,36 @@ def run_weather_sync_job():
             "FAILED" if success_count == 0 else "PARTIAL"
         )
 
-        final_message = f"Completed: success={success_count}, failed={failure_count}"
-
-       # print(f"[API CALL {api_call_id}] {final_message}")
-
         tools.update_api_call_status(
             call_id = api_call_id,
             status = final_status
         )
+
+        # c2 emmit start
+        total_locations = len(locations)
+
+        # mongoDB transfer funciton call (work in progress...)
+        # recent_data = tools.get_recent_weather_data(api_call_id)
+        # mongo_transfer_status = transfer_to_mongo(recent_data)
+
+        mongo_transfer_status = False  # placeholder for now
+
+        c2_data = {
+            "source": "weather",
+            "read": 2 + total_locations,     # db reads + api fetches
+            "create": success_count,         # inserts into weather table
+            "update": 1,                     # update_api_call_status
+            "delete": 0,                     # no deletes yet
+            "success": success_count,
+            "failed": failure_count,
+            "mongo_transfer_status": mongo_transfer_status
+        }
+
+        if socketio:
+            socketio.emit("c2", c2_data)
+
+        #print(f"[C2] {c2_data}")
+        
 
         return "\nWeather sync completed"
 
@@ -109,8 +137,28 @@ def run_weather_sync_job():
             call_id = api_call_id,
             status = "FAILED"
         )
-        return "Weather sync failed"
-    
 
-#if __name__ == "__main__":
-    #print(run_weather_sync_job())
+        # C2 emit on fatal failure
+        c2_data = {
+            "source": "weather",
+            "read": 0,
+            "create": 0,
+            "update": 0,
+            "delete": 0,
+            "success": 0,
+            "failed": len(tools.get_all_locations()),  # or total expected operations
+            "mongo_transfer_status": False,
+            "error": str(fatal_error)
+        }
+
+        if socketio:
+            socketio.emit("c2", c2_data)
+
+        #print(f"[C2 - FATAL] {c2_data}")
+
+        return "Weather sync failed"
+        
+
+
+# if __name__ == "__main__":
+#     print(run_weather_sync_job())

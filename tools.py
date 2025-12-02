@@ -10,14 +10,6 @@ def verify_login(data):
    return 0 
 
 
-
-
-
-
-
-
-
-
 def get_time():
 
     pst = pytz.timezone("America/Los_Angeles")  # local time
@@ -349,75 +341,46 @@ def get_all_locations():
 
     return locations
 
+def get_weather_rows(n):
+
+    conn = get_connection()
+    rows = []
+
+    try:
+        cur = conn.cursor(dictionary=True)
+        cur.execute(
+            "SELECT * FROM weather_data ORDER BY recorded_at DESC LIMIT ?",
+            (n,)
+        )
+        rows = cur.fetchall()
+
+    finally:
+        cur.close()
+        conn.close()
+
+    return rows
 
 
-#------------------------------#
-# ---- Testing procedures ---- #
-#------------------------------#
+def get_recent_weather_data(api_call_id):
+
+    conn = get_connection()
+    weather_rows = []
+
+    try:
+        cur = conn.cursor(dictionary=True)
+        cur.execute("""
+            SELECT *
+            FROM weather_data
+            WHERE api_call_id = ?
+            ORDER BY weather_id ASC
+        """, (api_call_id,))
+        weather_rows = cur.fetchall()
+
+    finally:
+        cur.close()
+        conn.close()
+
+    return weather_rows
+
+
 if __name__ == "__main__":
-    print("=== testing stored procedures ===\n")
-
-    # add a user
-    add_user("test_user", "test@gmail.com", "password123")
-    
-    # add location
-    add_location("Los Angeles", "USA", 34.0239, -118.172, "90210")
-
-    # add api source
-    add_data_source("OpenWeather", "weather", "https://api.openweathermap.org/data/2.5/weather", "apikey_1234")
-
-    # log api call and temporarily store latest call id for later usage
-    call_id = log_api_call(1, 1, "weather", "pending") 
-    print(f"Logged API call with call_id = {call_id}")
-
-    
-    # insert weather data
-    weather_id = insert_weather_data(
-        source_id = 1, # would remain the same based on the sources (weather or earthquake)
-        location_id = 1, # stored before making the call
-        user_id = 1, # would be received from the user currently logged in
-        temperature = 72.5,
-        humidity = 45.0,
-        wind_speed = 5.2,
-        recorded_at = None,  # let procedure default to NOW()
-        call_id = call_id
-    )
-
-    # insert earthquake data
-    earthquake_id = insert_earthquake_data(
-        source_id = 1,
-        location_id = 1,
-        user_id = 1,
-        magnitude = 4.5,
-        depth = 10.2,
-        recorded_at = None,
-        call_id=call_id
-    )
- 
-    # log weather error
-    error_id = log_weather_error(
-        call_id = call_id,
-        error_type = "TemperatureError",
-        error_message = "Temperature sensor returned N/A"
-    )
-
-    # log earthquake error
-    error_id = log_earthquake_error(
-        call_id = call_id,
-        error_type = "MagnitudeError",
-        error_message = "Magnitude value out of expected range"
-    )
-
-    # log sample dataflow
-    flow_id = log_dataflow(
-        source_db = "maria_db",
-        destination_db = "mongo_db",
-        table_name = "weather_data",
-        record_count = 15, # number rows being transferred
-        user_id = 1 # user making the transfer (necessary?)
-    )
-
-    # update status of api call based on temporarily stored call_id (most recent call)
-    rows_updated = update_api_call_status(call_id, "success")
-
-    print("=== Done testing ===")
