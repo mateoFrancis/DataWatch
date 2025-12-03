@@ -1,5 +1,5 @@
 from pymongo import MongoClient
-from pymongo.errors import WriteError
+from pymongo.errors import WriteError, CollectionInvalid, OperationFailure
 from datetime import datetime
 
 client = MongoClient("mongodb+srv://fs2002_db_user:Oxidation87@datawatch.fnxzk83.mongodb.net/?appName=DataWatch")
@@ -10,7 +10,7 @@ earthquake_schema = {
     "validator": {
         "$jsonSchema": {
             "bsonType": "object",
-            "required": ["earthquake_id", "source_id", "location_id", "user_id", "magnitude", "depth", "recorded_at"],
+            "required": ["earthquake_id",  "source_id", "location_id", "user_id", "magnitude", "depth", "recorded_at"],
             "properties": {
                 "earthquake_id": {
                     "bsonType": "int"
@@ -76,6 +76,59 @@ weather_schema = {
     }
 }
 
+locations_schema = {
+    "validator": {
+        "$jsonSchema": {
+            "bsonType": "object",
+            "required": [ "location_id", "city", "country", "lat", "lon"],
+            "properties": {
+                "location_id": {
+                    "bsonType": "int",
+                },
+                "city": {
+                    "bsonType": "string",
+                },
+                "country": {
+                    "bsonType": "string",
+                },
+                "lat": {
+                    "bsonType": "double",
+                },
+                "lon": {
+                    "bsonType": "double"
+                }
+            }
+        }
+    }
+}
+
+data_sources_schema = {
+    "validator": {
+        "$jsonSchema": {
+            "bsonType": "object",
+            "required": ["source_id", "name", "type", "base_url", "created_datetime"],
+            "properties": {
+                "source_id": {
+                    "bsonType": "int"
+                },
+                "name": {
+                    "bsonType": "string"
+                },
+                "type": {
+                    "bsonType": "string"
+                },
+                "base_url": {
+                    "bsonType": "string"
+                },
+                "createdat_at": {
+                    "bsonType": "date"
+                }
+
+            }
+        }
+    }
+}
+
 # creates the collection
 try:
     db.create_collection("earthquake_data", validator=earthquake_schema["validator"])
@@ -84,7 +137,7 @@ except Exception:
     db.command({
         "collMod": "earthquake_data",
         "validator": earthquake_schema["validator"],
-        "validationLevel": "moderate"
+
     })
 
 try:
@@ -94,5 +147,25 @@ except Exception:
     db.command({
         "collMod": "weather_data",
         "validator": weather_schema["validator"],
+        "validationLevel": "moderate"
+    })
+
+try:
+    db.create_collection("locations", validator=locations_schema["validator"])
+except Exception:
+    # it's like sql's drop table procedure
+    db.command({
+        "collMod": "locations",
+        "validator": locations_schema["validator"],
+        "validationLevel": "moderate"
+    })
+
+try:
+    db.create_collection("data_sources", validator=data_sources_schema["validator"])
+except Exception:
+    # it's like sql's drop table procedure
+    db.command({
+        "collMod": "data_sources",
+        "validator": data_sources_schema["validator"],
         "validationLevel": "moderate"
     })
