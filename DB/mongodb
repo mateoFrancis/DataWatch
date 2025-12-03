@@ -137,7 +137,7 @@ except Exception:
     db.command({
         "collMod": "earthquake_data",
         "validator": earthquake_schema["validator"],
-
+        "validationLevel": "moderate"
     })
 
 try:
