@@ -1,10 +1,8 @@
-// HomePage.dart
 // -----------------------------------------------------------------------------
 // Sections with citations:
 //  1) Imports and persisted keys
 //     - Flutter Material library: https://api.flutter.dev/flutter/material/material-library.html
 //     - Shared preferences: https://pub.dev/packages/shared_preferences
-//     - HTTP client: https://pub.dev/packages/http
 //     - Dart async (Timer/Future): https://api.dart.dev/stable/dart-async/dart-async-library.html
 //     - Dart convert (JSON): https://api.dart.dev/stable/dart-convert/dart-convert-library.html
 //
@@ -20,13 +18,11 @@
 //  5) Updates (periodic polling)
 //     - Dart Timer: https://api.dart.dev/stable/dart-async/Timer-class.html
 //
-//  6) HTTP helpers and JSON probing
-//     - Flutter networking (fetch data): https://docs.flutter.dev/cookbook/networking/fetch-data
-//     - Dart JSON decoding: https://api.flutter.dev/flutter/dart-convert/jsonDecode.html
-//     - HTTP package: https://pub.dev/packages/http
+//  6) Socket.IO helpers and JSON probing (socket-only build)
+//     - socket_io_client package: https://pub.dev/packages/socket_io_client
+//     - Dart JSON decoding: https://api.dart.dev/stable/dart-convert/dart-convert-library.html
 //
-//  7) Data generation for sources (A/B backend, C/D simulated)
-//     - Flutter networking (fetch data): https://docs.flutter.dev/cookbook/networking/fetch-data
+//  7) Data generation for sources (A/B backend via socket, C/D simulated via socket)
 //     - Dart math (Random): https://api.dart.dev/stable/dart-math/dart-math-library.html
 //
 //  8) Status aggregation and formatting helpers
@@ -47,8 +43,7 @@
 //     - TabBarView: https://api.flutter.dev/flutter/material/TabBarView-class.html
 //
 // 12) Logout handling
-//     - HTTP requests in Flutter: https://docs.flutter.dev/cookbook/networking/fetch-data
-//     - HTTP package: https://pub.dev/packages/http
+//     - Socket-based logout or server-side session handling (adapt as needed)
 //
 // 13) Color palettes and filters
 //     - ColorFilter: https://api.flutter.dev/flutter/dart-ui/ColorFilter-class.html
@@ -59,6 +54,7 @@
 //     - Dart convert (JSON formatting): https://api.dart.dev/stable/dart-convert/dart-convert-library.html
 // -----------------------------------------------------------------------------
 
+
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
@@ -66,7 +62,9 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'; // Clipboard support
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:http/http.dart' as http;
+
+// --- Socket.IO client import (socket-only build) ---
+import 'package:socket_io_client/socket_io_client.dart' as IO;
 
 import 'about_page.dart';
 import 'main.dart';
@@ -133,7 +131,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   // Set _isTestMode to false for production builds; true for local testing.
   static const bool _isTestMode = false; // set false for production builds
 
-  // Endpoints for the connection and report socket/json endpoints.
+  // Endpoints (kept for reference; socket-only build uses same logical endpoints via socket events)
   String get _c1Endpoint =>
       _isTestMode ? 'http://127.0.0.1:5000/C1' : 'https://datawatchapp.com/api/C1';
   String get _c2Endpoint =>
@@ -150,6 +148,16 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
   ColorVisionMode _colorMode = ColorVisionMode.Original;
 
+  // Socket.IO client instance and latest socket payloads store
+  IO.Socket? _socket;
+  // _latestSocket stores either event-level payloads or event+source payloads.
+  // Keys used:
+  //   'c1' -> latest c1 payload (no source)
+  //   'c2_weather' -> latest c2 payload for source "weather"
+  //   'c2_earthquake' -> latest c2 payload for source "earthquake"
+  //   similarly for c3 if server includes source
+  final Map<String, Map<String, dynamic>> _latestSocket = {};
+
   @override
   void initState() {
     super.initState();
@@ -159,15 +167,23 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   @override
   void dispose() {
     _refreshTimer?.cancel();
+    try {
+      _socket?.disconnect();
+      _socket?.destroy();
+    } catch (_) {}
     super.dispose();
   }
 
   Future<void> _initEverything() async {
     await _loadPersistedState();
     await _loadLastCombinedReport();
+
+    // Setup socket listeners before generating data so incoming events are captured
+    _setupSocketListeners();
+
     await _generateData();
     await _evaluateAndPersistChanges();
-    _startUpdates(); // polling-only updates
+    _startUpdates(); // periodic UI refresh to reflect socket updates
     setState(() {});
   }
 
@@ -284,9 +300,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   }
 
   // -----------------------
-  // 5) Updates (polling only)
+  // 5) Updates (periodic UI refresh)
   // -----------------------
-  // Polling keeps UI updated.
   void _startUpdates() {
     _startTimer();
   }
@@ -294,7 +309,10 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   void _startTimer() {
     _refreshTimer?.cancel();
     _refreshTimer = Timer.periodic(Duration(seconds: _refreshSeconds), (timer) async {
-      await _onRefreshCycle();
+      // No HTTP polling; timer triggers UI refresh to reflect latest socket data
+      await _generateData();
+      await _evaluateAndPersistChanges();
+      if (mounted) setState(() {});
     });
   }
 
@@ -305,47 +323,117 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   }
 
   // -----------------------
-  // 6) HTTP helpers and JSON probing
+  // 6) Socket.IO helpers and JSON probing (socket-only)
   // -----------------------
-  Future<Map<String, dynamic>> _probeUrl(String url, {Duration timeout = const Duration(seconds: 5)}) async {
-    final result = {'status': 'down', 'latencyMs': 9999, 'body': null};
-    try {
-      final swStart = DateTime.now();
-      final resp = await http.get(Uri.parse(url)).timeout(timeout);
-      final latency = DateTime.now().difference(swStart).inMilliseconds;
-      result['latencyMs'] = latency;
-      if (resp.statusCode == 200) {
-        try {
-          final body = jsonDecode(resp.body);
-          result['body'] = body;
-          result['status'] = latency < 800 ? 'ok' : 'warning';
-        } catch (_) {
-          result['status'] = 'error';
-        }
-      } else {
-        result['status'] = 'down';
-      }
-    } on TimeoutException {
-      result['status'] = 'down';
-    } catch (_) {
-      result['status'] = 'down';
-    }
-    return result;
-  }
-
-  Future<Map<String, dynamic>?> _probeJsonEndpoint(String url, {Duration timeout = const Duration(seconds: 5)}) async {
-    try {
-      final resp = await http.get(Uri.parse(url)).timeout(timeout);
-      if (resp.statusCode == 200) {
-        final body = jsonDecode(resp.body);
-        if (body is Map<String, dynamic>) return body;
-      }
-    } catch (_) {}
+  // Helper to map display name to server source key
+  // Server uses "weather" for Source A and "earthquake" for Source B.
+  // We also map Source C -> 'weather' and Source D -> 'earthquake' for test parity.
+  String? _serverSourceKeyForDisplayName(String displayName) {
+    final lower = displayName.toLowerCase();
+    if (lower.contains('source a') || lower.contains('weather')) return 'weather';
+    if (lower.contains('source b') || lower.contains('earthquake')) return 'earthquake';
+    if (lower.contains('source c')) return 'weather'; // test source C behaves like A by default mapping
+    if (lower.contains('source d')) return 'earthquake'; // test source D behaves like B by default mapping
+    // If user renamed the source in settings, try to match by configured canonical key:
+    if (_sourceSettings.containsKey('Source A') && (_sourceSettings['Source A']?['displayName'] ?? 'Source A') == displayName) return 'weather';
+    if (_sourceSettings.containsKey('Source B') && (_sourceSettings['Source B']?['displayName'] ?? 'Source B') == displayName) return 'earthquake';
+    if (_sourceSettings.containsKey('Source C') && (_sourceSettings['Source C']?['displayName'] ?? 'Source C') == displayName) return 'weather';
+    if (_sourceSettings.containsKey('Source D') && (_sourceSettings['Source D']?['displayName'] ?? 'Source D') == displayName) return 'earthquake';
     return null;
   }
 
+  // Helper to fetch latest socket payload for an event and optional source
+  Map<String, dynamic>? _latestSocketPayload(String event, [String? sourceKey]) {
+    if (sourceKey != null) {
+      final key = '${event}_$sourceKey';
+      if (_latestSocket.containsKey(key)) return _latestSocket[key];
+    }
+    if (_latestSocket.containsKey(event)) return _latestSocket[event];
+    return null;
+  }
+
+  // Setup socket listeners (adds listeners for c1, c2, c3)
+  void _setupSocketListeners() {
+    try {
+      final base = _isTestMode ? 'http://127.0.0.1:5000' : 'https://datawatchapp.com';
+      // Use websocket transport for web compatibility
+      _socket = IO.io(base, <String, dynamic>{
+        'transports': ['websocket'],
+        'autoConnect': false,
+      });
+
+      _socket?.on('connect', (_) {
+        // Connected
+      });
+
+      // c1: connection health (no source)
+      _socket?.on('c1', (data) {
+        try {
+          if (data is Map) {
+            _latestSocket['c1'] = Map<String, dynamic>.from(data as Map);
+          } else if (data is String) {
+            final parsed = jsonDecode(data);
+            if (parsed is Map) _latestSocket['c1'] = Map<String, dynamic>.from(parsed);
+          }
+        } catch (_) {}
+        if (mounted) setState(() {});
+      });
+
+      // c2: includes "source" field (e.g., "weather" or "earthquake")
+      _socket?.on('c2', (data) {
+        try {
+          Map<String, dynamic>? payload;
+          if (data is Map) payload = Map<String, dynamic>.from(data as Map);
+          else if (data is String) {
+            final parsed = jsonDecode(data);
+            if (parsed is Map) payload = Map<String, dynamic>.from(parsed);
+          }
+          if (payload != null) {
+            final src = (payload['source'] ?? '').toString();
+            if (src.isNotEmpty) {
+              _latestSocket['c2_$src'] = payload;
+            } else {
+              _latestSocket['c2'] = payload;
+            }
+          }
+        } catch (_) {}
+        if (mounted) setState(() {});
+      });
+
+      // c3: may include source similarly; handle generically
+      _socket?.on('c3', (data) {
+        try {
+          Map<String, dynamic>? payload;
+          if (data is Map) payload = Map<String, dynamic>.from(data as Map);
+          else if (data is String) {
+            final parsed = jsonDecode(data);
+            if (parsed is Map) payload = Map<String, dynamic>.from(parsed);
+          }
+          if (payload != null) {
+            final src = (payload['source'] ?? '').toString();
+            if (src.isNotEmpty) {
+              _latestSocket['c3_$src'] = payload;
+            } else {
+              _latestSocket['c3'] = payload;
+            }
+          }
+        } catch (_) {}
+        if (mounted) setState(() {});
+      });
+
+      _socket?.on('disconnect', (_) {
+        // Disconnected
+      });
+
+      // Connect
+      _socket?.connect();
+    } catch (e) {
+      // If socket setup fails, we silently continue; UI will show 'down' until socket data arrives.
+    }
+  }
+
   // -----------------------
-  // 7) Data generation for sources (A/B backend, C/D simulated)
+  // 7) Data generation for sources (A/B backend via socket, C/D simulated via socket)
   // -----------------------
   String _normalizeStatus(dynamic s) {
     if (s == null) return 'down';
@@ -356,6 +444,105 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     if (str.contains('error')) return 'error';
     if (str.contains('down')) return 'down';
     return 'warning';
+  }
+
+  // R1: translate C1 into human sentences and a status
+  Map<String, dynamic> _formatR1FromC1(String sourceName, Map<String, dynamic>? c1Json) {
+    // Default
+    final Map<String, String> c1 = {
+      'database': _normalizeStatus(c1Json?['database']),
+      'api': _normalizeStatus(c1Json?['api']),
+      'socket': _normalizeStatus(c1Json?['socket']),
+    };
+
+    final List<String> lines = [];
+    if (c1['database'] == 'ok') lines.add('Database connection for $sourceName is healthy.');
+    if (c1['database'] == 'warning') lines.add('Database connection for $sourceName shows intermittent issues.');
+    if (c1['database'] == 'error') lines.add('Database connection for $sourceName returned errors.');
+    if (c1['database'] == 'down') lines.add('Database connection for $sourceName is down.');
+
+    if (c1['api'] == 'ok') lines.add('API endpoint for $sourceName is responding normally.');
+    if (c1['api'] == 'warning') lines.add('API endpoint for $sourceName is slow or returning warnings.');
+    if (c1['api'] == 'error') lines.add('API endpoint for $sourceName returned errors.');
+    if (c1['api'] == 'down') lines.add('API endpoint for $sourceName is unreachable.');
+
+    if (c1['socket'] == 'ok') lines.add('Socket connection for $sourceName is active.');
+    if (c1['socket'] == 'stale') lines.add('Socket connection for $sourceName appears stale.');
+    if (c1['socket'] == 'warning') lines.add('Socket connection for $sourceName shows warnings.');
+    if (c1['socket'] == 'down') lines.add('Socket connection for $sourceName is down.');
+
+    final String combined = lines.isEmpty ? 'No connection issues detected for $sourceName.' : lines.join('\n');
+    final String status = _mirrorFromC1(c1);
+    return {'status': status, 'text': combined};
+  }
+
+  // R2: translate C2 and C3 into human sentences and a status (source-aware)
+  Map<String, dynamic> _formatR2FromC2C3(String sourceName, Map<String, dynamic>? c2Json, Map<String, dynamic>? c3Json) {
+    final List<String> lines = [];
+    String status = 'ok';
+
+    // Interpret C2 (CRUD/movement)
+    if (c2Json != null) {
+      // If server sends 'status' use it; otherwise infer from fields
+      String raw = '';
+      if (c2Json.containsKey('status')) raw = c2Json['status'].toString();
+      else if (c2Json.containsKey('success')) raw = (c2Json['success'] is num && (c2Json['success'] as num) > 0) ? 'ok' : 'warning';
+      else if (c2Json.containsKey('read') || c2Json.containsKey('create')) raw = 'ok';
+      else raw = 'warning';
+
+      final s = _normalizeStatus(raw);
+      if (s == 'ok') lines.add('Data movement (CRUD) for $sourceName is operating normally.');
+      if (s == 'warning') lines.add('Data movement (CRUD) for $sourceName shows partial success or warnings.');
+      if (s == 'error') lines.add('Data movement (CRUD) for $sourceName encountered errors.');
+      if (s == 'down') lines.add('Data movement (CRUD) for $sourceName is down.');
+      if (s == 'down' || s == 'error') status = s;
+      if (s == 'warning' && status != 'error' && status != 'down') status = 'warning';
+    } else {
+      lines.add('No data movement (C2) information available for $sourceName.');
+      status = 'down';
+    }
+
+    // Interpret C3 (validation / data)
+    if (c3Json != null) {
+      final dataStatus = _normalizeStatus(c3Json['data']);
+      final varianceStatus = _normalizeStatus(c3Json['variance']);
+
+      if (dataStatus == 'ok') {
+        // Try to extract a value for a more informative sentence
+        if (c3Json.containsKey('value') && (c3Json['value'] is num)) {
+          lines.add('Latest reported value for $sourceName is ${c3Json['value']}.');
+        } else if (c3Json.containsKey('magnitude') && (c3Json['magnitude'] is num)) {
+          lines.add('Latest magnitude for $sourceName is ${c3Json['magnitude']}.');
+        } else if (c3Json.containsKey('temperature') && (c3Json['temperature'] is num)) {
+          lines.add('Latest temperature for $sourceName is ${c3Json['temperature']}°.');
+        } else {
+          lines.add('Data validation for $sourceName indicates data is present and valid.');
+        }
+      } else if (dataStatus == 'warning') {
+        lines.add('Data for $sourceName is present but shows potential issues.');
+      } else if (dataStatus == 'down') {
+        lines.add('No recent data available for $sourceName.');
+      }
+
+      if (varianceStatus == 'warning') {
+        lines.add('Data variance for $sourceName exceeds configured thresholds.');
+        if (status != 'error' && status != 'down') status = 'warning';
+      }
+      if (varianceStatus == 'error' || varianceStatus == 'down') status = varianceStatus;
+    } else {
+      lines.add('No data validation (C3) information available for $sourceName.');
+      if (status != 'error') status = 'warning';
+    }
+
+    final String combined = lines.join('\n');
+    return {'status': status, 'text': combined};
+  }
+
+  // R3: combine R1 and R2
+  Map<String, dynamic> _combineReports(Map<String, dynamic> r1, Map<String, dynamic> r2) {
+    final String status = _combineReportStatus(r1['status'] as String? ?? 'down', r2['status'] as String? ?? 'down');
+    final String text = 'R1 (Connections):\n${r1['text']}\n\nR2 (CRUD + Validation):\n${r2['text']}\n\nCombined status: ${status.toUpperCase()}';
+    return {'status': status, 'text': text};
   }
 
   Future<void> _generateData() async {
@@ -370,42 +557,54 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       });
     }
 
-    // Source A (backend) - use configured endpoints C1..R2
+    // Source A (backend) - prefer socket payloads
     {
       final name = _sourceSettings.containsKey('Source A') && _sourceSettings['Source A']!.containsKey('displayName')
           ? _sourceSettings['Source A']!['displayName'] as String
           : 'Source A';
 
-      // Use the endpoint getters so test vs production is consistent with main.dart
-      final c1Json = await _probeJsonEndpoint(_c1Endpoint);
-      final c2Json = await _probeJsonEndpoint(_c2Endpoint);
-      final c3Json = await _probeJsonEndpoint(_c3Endpoint);
-      final r1Json = await _probeJsonEndpoint(_r1Endpoint);
-      final r2Json = await _probeJsonEndpoint(_r2Endpoint);
+      final serverKeyA = _serverSourceKeyForDisplayName(name); // 'weather' expected
+      final c1Json = _latestSocketPayload('c1'); // c1 is global
+      final c2Json = serverKeyA != null ? _latestSocketPayload('c2', serverKeyA) : _latestSocketPayload('c2');
+      final c3Json = serverKeyA != null ? _latestSocketPayload('c3', serverKeyA) : _latestSocketPayload('c3');
 
       final c1 = {
         'database': _normalizeStatus(c1Json?['database']),
         'api': _normalizeStatus(c1Json?['api']),
         'socket': _normalizeStatus(c1Json?['socket']),
       };
-      final c2 = {'status': _normalizeStatus(c2Json?['status'])};
+
+      // Map c2 to a simple status for UI
+      String c2StatusRaw = 'down';
+      if (c2Json != null) {
+        if (c2Json.containsKey('status')) c2StatusRaw = c2Json['status'].toString();
+        else if (c2Json.containsKey('success') && (c2Json['success'] is num || c2Json['success'] is String)) {
+          final val = c2Json['success'];
+          if ((val is num && val > 0) || (val is String && val.toLowerCase() == 'true')) c2StatusRaw = 'ok';
+          else c2StatusRaw = 'warning';
+        } else if (c2Json.containsKey('read') || c2Json.containsKey('create')) {
+          c2StatusRaw = 'ok';
+        } else {
+          c2StatusRaw = 'warning';
+        }
+      }
+      final c2 = {'status': _normalizeStatus(c2StatusRaw)};
+
       final c3 = {
         'data': _normalizeStatus(c3Json?['data']),
         'variance': _normalizeStatus(c3Json?['variance']),
       };
 
-      final r1Status = _normalizeStatus(r1Json?['status']);
-      final r2Status = _normalizeStatus(r2Json?['status']);
-
-      final r1Details = _buildR1Details(name, c1);
-      final r2Details = _buildR2Details(name, c2);
-      final r3Status = _combineReportStatus(r1Status, r2Status);
+      // Build R1 and R2 from socket-derived C1/C2/C3
+      final r1 = _formatR1FromC1(name, c1Json);
+      final r2 = _formatR2FromC2C3(name, c2Json, c3Json);
+      final r3 = _combineReports(r1, r2);
 
       final connKey = _aggregateConnectionButtonStatus(c1, c2, c3);
-      final repKey = r3Status;
+      final repKey = r3['status'] as String;
 
       final connDetails = _humanCDetails(c1, c2, c3);
-      final repDetails = _humanRDetails(r1Details, r2Details, r3Status);
+      final repDetails = r3['text'] as String;
 
       final tsIso = now.toIso8601String();
       _markProgressStart(name);
@@ -427,51 +626,62 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         'variancePercent': _sourceSettings['Source A']?['variancePercent'] ?? DEFAULT_VARIANCE_PERCENT,
         'reportDueHour': _sourceSettings['Source A']?['reportDueHour'] ?? 0,
         'reportDueMinute': _sourceSettings['Source A']?['reportDueMinute'] ?? 0,
-        'reportValue': null,
+        'reportValue': c3Json?['value'] ?? c3Json?['temperature'] ?? null,
         'C1': c1,
         'C2': c2,
         'C3': c3,
-        'R1': {'status': r1Status, 'details': r1Details},
-        'R2': {'status': r2Status, 'details': r2Details},
-        'R3': {'status': r3Status, 'generatedAt': tsIso},
+        'R1': {'status': r1['status'], 'details': r1['text']},
+        'R2': {'status': r2['status'], 'details': r2['text']},
+        'R3': {'status': r3['status'], 'generatedAt': tsIso, 'details': r3['text']},
       });
     }
 
-    // Source B (backend)
+    // Source B (backend) - prefer socket payloads
     {
       final name = _sourceSettings.containsKey('Source B') && _sourceSettings['Source B']!.containsKey('displayName')
           ? _sourceSettings['Source B']!['displayName'] as String
           : 'Source B';
 
-      final c1Json = await _probeJsonEndpoint(_c1Endpoint);
-      final c2Json = await _probeJsonEndpoint(_c2Endpoint);
-      final c3Json = await _probeJsonEndpoint(_c3Endpoint);
-      final r1Json = await _probeJsonEndpoint(_r1Endpoint);
-      final r2Json = await _probeJsonEndpoint(_r2Endpoint);
+      final serverKeyB = _serverSourceKeyForDisplayName(name); // 'earthquake' expected
+      final c1Json = _latestSocketPayload('c1'); // c1 is global
+      final c2Json = serverKeyB != null ? _latestSocketPayload('c2', serverKeyB) : _latestSocketPayload('c2');
+      final c3Json = serverKeyB != null ? _latestSocketPayload('c3', serverKeyB) : _latestSocketPayload('c3');
 
       final c1 = {
         'database': _normalizeStatus(c1Json?['database']),
         'api': _normalizeStatus(c1Json?['api']),
         'socket': _normalizeStatus(c1Json?['socket']),
       };
-      final c2 = {'status': _normalizeStatus(c2Json?['status'])};
+
+      String c2StatusRaw = 'down';
+      if (c2Json != null) {
+        if (c2Json.containsKey('status')) c2StatusRaw = c2Json['status'].toString();
+        else if (c2Json.containsKey('success') && (c2Json['success'] is num || c2Json['success'] is String)) {
+          final val = c2Json['success'];
+          if ((val is num && val > 0) || (val is String && val.toLowerCase() == 'true')) c2StatusRaw = 'ok';
+          else c2StatusRaw = 'warning';
+        } else if (c2Json.containsKey('read') || c2Json.containsKey('create')) {
+          c2StatusRaw = 'ok';
+        } else {
+          c2StatusRaw = 'warning';
+        }
+      }
+      final c2 = {'status': _normalizeStatus(c2StatusRaw)};
+
       final c3 = {
         'data': _normalizeStatus(c3Json?['data']),
         'variance': _normalizeStatus(c3Json?['variance']),
       };
 
-      final r1Status = _normalizeStatus(r1Json?['status']);
-      final r2Status = _normalizeStatus(r2Json?['status']);
-
-      final r1Details = _buildR1Details(name, c1);
-      final r2Details = _buildR2Details(name, c2);
-      final r3Status = _combineReportStatus(r1Status, r2Status);
+      final r1 = _formatR1FromC1(name, c1Json);
+      final r2 = _formatR2FromC2C3(name, c2Json, c3Json);
+      final r3 = _combineReports(r1, r2);
 
       final connKey = _aggregateConnectionButtonStatus(c1, c2, c3);
-      final repKey = r3Status;
+      final repKey = r3['status'] as String;
 
       final connDetails = _humanCDetails(c1, c2, c3);
-      final repDetails = _humanRDetails(r1Details, r2Details, r3Status);
+      final repDetails = r3['text'] as String;
 
       final tsIso = now.toIso8601String();
       _markProgressStart(name);
@@ -493,59 +703,110 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         'variancePercent': _sourceSettings['Source B']?['variancePercent'] ?? DEFAULT_VARIANCE_PERCENT,
         'reportDueHour': _sourceSettings['Source B']?['reportDueHour'] ?? 0,
         'reportDueMinute': _sourceSettings['Source B']?['reportDueMinute'] ?? 0,
-        'reportValue': null,
+        'reportValue': c3Json?['value'] ?? c3Json?['magnitude'] ?? null,
         'C1': c1,
         'C2': c2,
         'C3': c3,
-        'R1': {'status': r1Status, 'details': r1Details},
-        'R2': {'status': r2Status, 'details': r2Details},
-        'R3': {'status': r3Status, 'generatedAt': tsIso},
+        'R1': {'status': r1['status'], 'details': r1['text']},
+        'R2': {'status': r2['status'], 'details': r2['text']},
+        'R3': {'status': r3['status'], 'generatedAt': tsIso, 'details': r3['text']},
       });
     }
 
-    // Source C (Open-Meteo simulation)
+    // Source C (Open-Meteo simulation) - simulate normal flow with occasional anomalies
     {
       final name = _sourceSettings.containsKey('Source C') && _sourceSettings['Source C']!.containsKey('displayName')
           ? _sourceSettings['Source C']!['displayName'] as String
           : 'Source C';
 
-      final url =
-          'https://api.open-meteo.com/v1/forecast?latitude=35.3733&longitude=-119.0187&current_weather=true';
-      final probe = await _probeUrl(url, timeout: const Duration(seconds: 5));
-      final latency = probe['latencyMs'] as int? ?? 9999;
-      final pbody = probe['body'] as Map<String, dynamic>?;
-      final pstatus = probe['status'] as String;
+      // Try to use socket payload if present for weather, but primary behavior is simulated
+      final socketC2 = _latestSocketPayload('c2', 'weather');
+      final socketC3 = _latestSocketPayload('c3', 'weather');
 
-      final mapped = _mapProbeToKeysAndValue(name, pbody, pstatus);
-      final double? temp = mapped['value'] as double?;
-      final nowTs = DateTime.now();
-
-      final c1 = {
-        'database': latency < 1500 ? 'ok' : 'warning',
-        'api': pstatus,
-        'socket': 'stale',
-      };
-      final c2 = {'status': pstatus == 'ok' ? (_rng.nextDouble() < 0.8 ? 'ok' : 'warning') : 'down'};
+      // Base simulated temperature (Celsius) and small random walk
+      double baseTemp = 18.0 + (_rng.nextDouble() * 10.0); // 18..28 typical
+      // If previous snapshot had a value, nudge from it to make smooth transitions
       final prevValue = prev.containsKey(name) ? (prev[name]['reportValue'] as num?)?.toDouble() : null;
-      String varianceKey = 'ok';
-      if (temp != null && prevValue != null) {
-        final diff = (temp - prevValue).abs();
-        final pct = prevValue == 0 ? (diff > 0 ? 100.0 : 0.0) : (diff / prevValue * 100.0);
-        varianceKey = pct >= DEFAULT_VARIANCE_PERCENT ? 'warning' : 'ok';
+      if (prevValue != null) {
+        // small step toward baseTemp
+        baseTemp = prevValue + (_rng.nextDouble() - 0.5) * 1.5;
       }
-      final c3 = {'data': temp == null ? 'warning' : 'ok', 'variance': varianceKey};
 
-      final r1Status = _mirrorFromC1(c1);
-      final r2Status = _mirrorFromC2(c2);
-      final r1Details = _buildR1Details(name, c1);
-      final r2Details = _buildR2Details(name, c2);
-      final r3Status = _combineReportStatus(r1Status, r2Status);
+      // Occasionally inject anomalies: low probability for error/down/warning
+      final anomalyRoll = _rng.nextDouble();
+      String dataStatus = 'ok';
+      String varianceStatus = 'ok';
+      double? reportedTemp = double.parse(baseTemp.toStringAsFixed(1));
 
-      final connKey = _aggregateConnectionButtonStatus(c1, c2, c3);
-      final repKey = r3Status;
-      final connDetails = 'connection ${connKey.toUpperCase()}: ${latency}ms to Open-Meteo\n${_humanCDetails(c1, c2, c3)}';
-      final repDetails = _humanRDetails(r1Details, r2Details, r3Status);
+      if (anomalyRoll < 0.02) {
+        // 2% chance of down (no data)
+        dataStatus = 'down';
+        reportedTemp = null;
+      } else if (anomalyRoll < 0.08) {
+        // 6% chance of warning (high variance or odd reading)
+        dataStatus = 'warning';
+        // produce an outlier
+        reportedTemp = double.parse((baseTemp + (_rng.nextBool() ? 8.0 : -8.0)).toStringAsFixed(1));
+        varianceStatus = 'warning';
+      } else if (anomalyRoll < 0.12) {
+        // 4% chance of error (bad payload)
+        dataStatus = 'error';
+        reportedTemp = null;
+      } else {
+        // Normal flow: small jitter
+        reportedTemp = double.parse((baseTemp + (_rng.nextDouble() - 0.5) * 0.8).toStringAsFixed(1));
+        // small chance of variance warning if change from prev is large
+        if (prevValue != null) {
+          final diff = (reportedTemp - prevValue).abs();
+          if (prevValue != 0 && (diff / prevValue * 100.0) > (_sourceSettings['Source C']?['variancePercent'] ?? DEFAULT_VARIANCE_PERCENT)) {
+            varianceStatus = 'warning';
+          }
+        }
+      }
 
+      // Build C1: simulate connection health; prefer global c1 if present
+      final globalC1 = _latestSocketPayload('c1');
+      String dbStatus = 'ok';
+      String apiStatus = 'ok';
+      String socketStatus = 'ok';
+      if (globalC1 != null) {
+        dbStatus = _normalizeStatus(globalC1['database']);
+        apiStatus = _normalizeStatus(globalC1['api']);
+        socketStatus = _normalizeStatus(globalC1['socket']);
+      } else {
+        // simulate occasional connection blips
+        final connRoll = _rng.nextDouble();
+        if (connRoll < 0.01) {
+          dbStatus = 'down';
+          apiStatus = 'down';
+          socketStatus = 'down';
+        } else if (connRoll < 0.05) {
+          apiStatus = 'warning';
+          socketStatus = 'stale';
+        }
+      }
+
+      final c1 = {'database': dbStatus, 'api': apiStatus, 'socket': socketStatus};
+      final c2 = {
+        // c2 for Open-Meteo is movement/CRUD; simulate reads/creates
+        'status': dataStatus == 'ok' ? (_rng.nextDouble() < 0.95 ? 'ok' : 'warning') : dataStatus,
+        'read': socketC2?['read'] ?? (10 + _rng.nextInt(5)),
+        'create': socketC2?['create'] ?? (1 + _rng.nextInt(3)),
+        'success': socketC2?['success'] ?? (1 + _rng.nextInt(3)),
+      };
+      final c3 = {'data': dataStatus, 'variance': varianceStatus, 'temperature': reportedTemp, 'value': reportedTemp};
+
+      final r1 = _formatR1FromC1(name, c1);
+      final r2 = _formatR2FromC2C3(name, c2, c3);
+      final r3 = _combineReports(r1, r2);
+
+      final connKey = _aggregateConnectionButtonStatus(Map<String, String>.from(c1), {'status': c2['status']}, Map<String, String>.from({'data': c3['data'], 'variance': c3['variance']}));
+      final repKey = r3['status'] as String;
+
+      final connDetails = _humanCDetails(Map<String, String>.from(c1), Map<String, String>.from({'status': c2['status']}), Map<String, String>.from({'data': c3['data'], 'variance': c3['variance']}));
+      final repDetails = r3['text'] as String;
+
+      final tsIso = now.toIso8601String();
       _markProgressStart(name);
 
       newSources.add({
@@ -556,8 +817,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         'reportIcon': _iconForKey(repKey),
         'connectionDetails': connDetails,
         'reportDetails': repDetails,
-        'lastConnUpdated': nowTs.toIso8601String(),
-        'lastRepUpdated': nowTs.toIso8601String(),
+        'lastConnUpdated': tsIso,
+        'lastRepUpdated': tsIso,
         'isUpdatingConn': false,
         'isUpdatingRep': false,
         'staleMinutesConn': _sourceSettings['Source C']?['staleMinutesConn'] ?? DEFAULT_STALE_MINUTES_CONN,
@@ -565,56 +826,102 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         'variancePercent': _sourceSettings['Source C']?['variancePercent'] ?? DEFAULT_VARIANCE_PERCENT,
         'reportDueHour': _sourceSettings['Source C']?['reportDueHour'] ?? 0,
         'reportDueMinute': _sourceSettings['Source C']?['reportDueMinute'] ?? 0,
-        'reportValue': temp,
+        'reportValue': c3['value'],
         'C1': c1,
-        'C2': c2,
-        'C3': c3,
-        'R1': {'status': r1Status, 'details': r1Details},
-        'R2': {'status': r2Status, 'details': r2Details},
-        'R3': {'status': r3Status, 'generatedAt': nowTs.toIso8601String()},
+        'C2': {'status': c2['status']},
+        'C3': {'data': c3['data'], 'variance': c3['variance']},
+        'R1': {'status': r1['status'], 'details': r1['text']},
+        'R2': {'status': r2['status'], 'details': r2['text']},
+        'R3': {'status': r3['status'], 'generatedAt': tsIso, 'details': r3['text']},
       });
     }
 
-    // Source D (USGS simulation)
+    // Source D (USGS simulation) - simulate earthquake feed with occasional events and sensible statuses
     {
       final name = _sourceSettings.containsKey('Source D') && _sourceSettings['Source D']!.containsKey('displayName')
           ? _sourceSettings['Source D']!['displayName'] as String
           : 'Source D';
 
-      final startIso = DateTime.now().subtract(const Duration(hours: 1)).toUtc().toIso8601String();
-      final url =
-          'https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&limit=1&starttime=$startIso';
-      final probe = await _probeUrl(url, timeout: const Duration(seconds: 5));
-      final latency = probe['latencyMs'] as int? ?? 9999;
-      final pbody = probe['body'] as Map<String, dynamic>?;
-      final pstatus = probe['status'] as String;
+      // Try to use socket payload if present for earthquake, but primary behavior is simulated
+      final socketD2 = _latestSocketPayload('c2', 'earthquake');
+      final socketD3 = _latestSocketPayload('c3', 'earthquake');
 
-      final mapped = _mapProbeToKeysAndValue(name, pbody, pstatus);
-      final double? magnitude = mapped['value'] as double?;
-      final nowTs = DateTime.now();
+      // Simulate typical small magnitudes most of the time, occasional larger events
+      double magnitude;
+      final eventRoll = _rng.nextDouble();
+      if (eventRoll < 0.01) {
+        // rare larger quake
+        magnitude = double.parse((4.0 + _rng.nextDouble() * 3.0).toStringAsFixed(1)); // 4.0 - 7.0
+      } else if (eventRoll < 0.08) {
+        // small but noticeable
+        magnitude = double.parse((2.5 + _rng.nextDouble() * 1.5).toStringAsFixed(1)); // 2.5 - 4.0
+      } else {
+        // background microquakes
+        magnitude = double.parse((0.5 + _rng.nextDouble() * 1.5).toStringAsFixed(1)); // 0.5 - 2.0
+      }
 
-      final c1 = {
-        'database': 'ok',
-        'api': pstatus,
-        'socket': 'stale',
+      // Occasionally simulate missing data or errors
+      final anomalyRoll = _rng.nextDouble();
+      String dataStatus = 'ok';
+      String varianceStatus = 'ok';
+      double? reportedMag = magnitude;
+      if (anomalyRoll < 0.03) {
+        // 3% chance of down
+        dataStatus = 'down';
+        reportedMag = null;
+      } else if (anomalyRoll < 0.09) {
+        // 6% chance of warning (inconsistent readings)
+        dataStatus = 'warning';
+        varianceStatus = 'warning';
+        // jitter magnitude
+        reportedMag = double.parse((magnitude + (_rng.nextDouble() - 0.5) * 1.5).toStringAsFixed(1));
+      } else if (anomalyRoll < 0.12) {
+        // 3% chance of error
+        dataStatus = 'error';
+        reportedMag = null;
+      }
+
+      // Build C1: prefer global c1 if present
+      final globalC1 = _latestSocketPayload('c1');
+      String dbStatus = 'ok';
+      String apiStatus = 'ok';
+      String socketStatus = 'ok';
+      if (globalC1 != null) {
+        dbStatus = _normalizeStatus(globalC1['database']);
+        apiStatus = _normalizeStatus(globalC1['api']);
+        socketStatus = _normalizeStatus(globalC1['socket']);
+      } else {
+        final connRoll = _rng.nextDouble();
+        if (connRoll < 0.02) {
+          dbStatus = 'down';
+          apiStatus = 'down';
+          socketStatus = 'down';
+        } else if (connRoll < 0.06) {
+          apiStatus = 'warning';
+          socketStatus = 'stale';
+        }
+      }
+
+      final c1 = {'database': dbStatus, 'api': apiStatus, 'socket': socketStatus};
+      final c2 = {
+        'status': dataStatus == 'ok' ? (_rng.nextDouble() < 0.9 ? 'ok' : 'warning') : dataStatus,
+        'read': socketD2?['read'] ?? (5 + _rng.nextInt(8)),
+        'create': socketD2?['create'] ?? (0 + _rng.nextInt(2)),
+        'success': socketD2?['success'] ?? (1 + _rng.nextInt(2)),
       };
-      final c2 = {'status': pstatus == 'ok' ? (_rng.nextDouble() < 0.85 ? 'ok' : 'warning') : 'down'};
-      final c3 = {
-        'data': magnitude == null ? 'warning' : 'ok',
-        'variance': _rng.nextDouble() < 0.15 ? 'warning' : 'ok',
-      };
+      final c3 = {'data': dataStatus, 'variance': varianceStatus, 'magnitude': reportedMag, 'value': reportedMag};
 
-      final r1Status = _mirrorFromC1(c1);
-      final r2Status = _mirrorFromC2(c2);
-      final r1Details = _buildR1Details(name, c1);
-      final r2Details = _buildR2Details(name, c2);
-      final r3Status = _combineReportStatus(r1Status, r2Status);
+      final r1 = _formatR1FromC1(name, c1);
+      final r2 = _formatR2FromC2C3(name, c2, c3);
+      final r3 = _combineReports(r1, r2);
 
-      final connKey = _aggregateConnectionButtonStatus(c1, c2, c3);
-      final repKey = r3Status;
-      final connDetails = 'connection ${connKey.toUpperCase()}: ${latency}ms to USGS\n${_humanCDetails(c1, c2, c3)}';
-      final repDetails = _humanRDetails(r1Details, r2Details, r3Status);
+      final connKey = _aggregateConnectionButtonStatus(Map<String, String>.from(c1), {'status': c2['status']}, Map<String, String>.from({'data': c3['data'], 'variance': c3['variance']}));
+      final repKey = r3['status'] as String;
 
+      final connDetails = _humanCDetails(Map<String, String>.from(c1), Map<String, String>.from({'status': c2['status']}), Map<String, String>.from({'data': c3['data'], 'variance': c3['variance']}));
+      final repDetails = r3['text'] as String;
+
+      final tsIso = now.toIso8601String();
       _markProgressStart(name);
 
       newSources.add({
@@ -625,8 +932,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         'reportIcon': _iconForKey(repKey),
         'connectionDetails': connDetails,
         'reportDetails': repDetails,
-        'lastConnUpdated': nowTs.toIso8601String(),
-        'lastRepUpdated': nowTs.toIso8601String(),
+        'lastConnUpdated': tsIso,
+        'lastRepUpdated': tsIso,
         'isUpdatingConn': false,
         'isUpdatingRep': false,
         'staleMinutesConn': _sourceSettings['Source D']?['staleMinutesConn'] ?? DEFAULT_STALE_MINUTES_CONN,
@@ -634,13 +941,13 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         'variancePercent': _sourceSettings['Source D']?['variancePercent'] ?? DEFAULT_VARIANCE_PERCENT,
         'reportDueHour': _sourceSettings['Source D']?['reportDueHour'] ?? 0,
         'reportDueMinute': _sourceSettings['Source D']?['reportDueMinute'] ?? 0,
-        'reportValue': magnitude,
+        'reportValue': c3['value'],
         'C1': c1,
-        'C2': c2,
-        'C3': c3,
-        'R1': {'status': r1Status, 'details': r1Details},
-        'R2': {'status': r2Status, 'details': r2Details},
-        'R3': {'status': r3Status, 'generatedAt': nowTs.toIso8601String()},
+        'C2': {'status': c2['status']},
+        'C3': {'data': c3['data'], 'variance': c3['variance']},
+        'R1': {'status': r1['status'], 'details': r1['text']},
+        'R2': {'status': r2['status'], 'details': r2['text']},
+        'R3': {'status': r3['status'], 'generatedAt': tsIso, 'details': r3['text']},
       });
     }
 
@@ -845,9 +1152,16 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
+    // FIX: Implement build(BuildContext) to satisfy abstract State requirement
     final palette = _paletteForMode(_colorMode);
     final navHex = palette['nav'] ?? '#1976d2';
     final navColor = Color(int.parse(navHex.replaceFirst('#', '0xff')));
+
+    final labelStyle = TextStyle(
+      fontSize: 12,
+      fontWeight: FontWeight.w600,
+      color: Color(int.parse((palette['text'] ?? '#000000').replaceFirst('#', '0xff'))),
+    );
 
     return Scaffold(
       appBar: AppBar(
@@ -937,11 +1251,42 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                         color: Color(int.parse((palette['bg'] ?? '#ffffff').replaceFirst('#', '0xff'))),
                       ),
                       child: Column(children: [
+                        // Top labels row: empty left column, Connection, Report
                         Row(children: [
                           SizedBox(width: 140, child: Text('', style: TextStyle(fontWeight: FontWeight.bold, color: Color(int.parse((palette['text'] ?? '#000000').replaceFirst('#', '0xff')))))),
                           Expanded(child: Center(child: Text('Connection', style: TextStyle(fontWeight: FontWeight.bold, color: Color(int.parse((palette['text'] ?? '#000000').replaceFirst('#', '0xff'))))))),
                           Expanded(child: Center(child: Text('Report', style: TextStyle(fontWeight: FontWeight.bold, color: Color(int.parse((palette['text'] ?? '#000000').replaceFirst('#', '0xff'))))))),
                         ]),
+                        // Sub-labels row that maps the three small bars to C1/C2/C3 and R1/R2/R3
+                        const SizedBox(height: 6),
+                        Row(children: [
+                          SizedBox(width: 140, child: Text('', style: labelStyle)),
+                          // Connection labels (C1 C2 C3)
+                          Expanded(
+                            child: Row(
+                              children: [
+                                Expanded(child: Center(child: Text('C1', style: labelStyle))),
+                                const SizedBox(width: 4),
+                                Expanded(child: Center(child: Text('C2', style: labelStyle))),
+                                const SizedBox(width: 4),
+                                Expanded(child: Center(child: Text('C3', style: labelStyle))),
+                              ],
+                            ),
+                          ),
+                          // Report labels (R1 R2 R3)
+                          Expanded(
+                            child: Row(
+                              children: [
+                                Expanded(child: Center(child: Text('R1', style: labelStyle))),
+                                const SizedBox(width: 4),
+                                Expanded(child: Center(child: Text('R2', style: labelStyle))),
+                                const SizedBox(width: 4),
+                                Expanded(child: Center(child: Text('R3', style: labelStyle))),
+                              ],
+                            ),
+                          ),
+                        ]),
+                        const SizedBox(height: 8),
                         const Divider(color: Colors.black),
                         Expanded(
                           child: ListView.separated(
@@ -1077,15 +1422,17 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                                           padding: const EdgeInsets.symmetric(vertical: 10),
                                         ),
                                         onPressed: () {
-                                          final r1Details = (s['R1'] as Map)['details']?.toString() ?? '';
-                                          final r2Details = (s['R2'] as Map)['details']?.toString() ?? '';
-                                          final infoMap = {
-                                            'R1 (Connections Report)': r1Details,
-                                            'R2 (Movement Report)': r2Details,
-                                            'R3 (Combined Report)': 'Status: $r3Status',
-                                          };
-                                          final pretty = _prettyJson(infoMap);
-                                          _showReportDialog(context, '$name - Report', pretty, repKey, lastRep, isUpdRep, infoMap);
+                                          // Show selection dialog to pick R1, R2, or R3
+                                          _showReportSelection(
+                                            context,
+                                            name,
+                                            (s['R1'] as Map)['details']?.toString() ?? '',
+                                            (s['R2'] as Map)['details']?.toString() ?? '',
+                                            (s['R3'] as Map)['details']?.toString() ?? '',
+                                            (s['R1'] as Map)['status']?.toString() ?? 'down',
+                                            (s['R2'] as Map)['status']?.toString() ?? 'down',
+                                            (s['R3'] as Map)['status']?.toString() ?? 'down',
+                                          );
                                         },
                                         child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
                                           Icon(repIcon, color: _colorForKey(repKey)),
@@ -1112,6 +1459,69 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
             ),
           );
         },
+      ),
+    );
+  }
+
+  // NEW: Report selection dialog and display
+  void _showReportSelection(BuildContext context, String sourceName, String r1Text, String r2Text, String r3Text, String r1Status, String r2Status, String r3Status) {
+    showDialog(
+      context: context,
+      builder: (_) {
+        return SimpleDialog(
+          title: Text('$sourceName - Choose report'),
+          children: [
+            SimpleDialogOption(
+              onPressed: () {
+                Navigator.of(context).pop();
+                _showSingleReport(context, '$sourceName - R1 (Connections)', r1Text, r1Status);
+              },
+              child: const Text('R1 — Connections'),
+            ),
+            SimpleDialogOption(
+              onPressed: () {
+                Navigator.of(context).pop();
+                _showSingleReport(context, '$sourceName - R2 (CRUD + Validation)', r2Text, r2Status);
+              },
+              child: const Text('R2 — CRUD + Data Validation'),
+            ),
+            SimpleDialogOption(
+              onPressed: () {
+                Navigator.of(context).pop();
+                _showSingleReport(context, '$sourceName - R3 (Combined)', r3Text, r3Status);
+              },
+              child: const Text('R3 — Combined Report'),
+            ),
+            SimpleDialogOption(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _showSingleReport(BuildContext context, String title, String content, String status) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Row(children: [Text(title), const Spacer(), Text(status.toUpperCase(), style: const TextStyle(fontWeight: FontWeight.bold))]),
+        content: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            SelectableText(content, minLines: 6),
+            const SizedBox(height: 12),
+            const Text('You can copy the report text to your clipboard using the Copy button.'),
+          ]),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Close')),
+          TextButton(onPressed: () {
+            Clipboard.setData(ClipboardData(text: content));
+            Navigator.of(context).pop();
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Report copied to clipboard')));
+          }, child: const Text('Copy')),
+        ],
       ),
     );
   }
@@ -1157,39 +1567,6 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
           ]),
         ),
         actions: [TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Close'))],
-      ),
-    );
-  }
-
-  // Dialog showing report details with Copy option for R3.
-  // SelectableText is used so manual selection and copy is possible.
-  void _showReportDialog(BuildContext context, String title, String content, String key, String? lastIso, bool isUpdating, Map<String, dynamic> reportMap) {
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: Row(children: [Text(title), const Spacer(), Icon(_iconForKey(key), color: _colorForKey(key))]),
-        content: SingleChildScrollView(
-          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-            // SelectableText allows manual highlight and copy.
-            SelectableText(content, minLines: 6),
-            const SizedBox(height: 12),
-            Text('Last update: ${_formatTime(lastIso)}'),
-            if (isUpdating) ...[
-              const SizedBox(height: 6),
-              const Text('Status: Updating...', style: TextStyle(fontStyle: FontStyle.italic)),
-            ]
-          ]),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Close')),
-          TextButton(onPressed: () {
-            // Copy full report to clipboard for easy paste into a file.
-            final pretty = _prettyJson(reportMap);
-            Clipboard.setData(ClipboardData(text: pretty));
-            Navigator.of(context).pop();
-            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Report copied to clipboard')));
-          }, child: const Text('Copy')),
-        ],
       ),
     );
   }
@@ -1361,6 +1738,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                     ),
                   ),
                 ]),
+                const SizedBox(height: 12),
               ]),
             ),
             actions: [
@@ -1471,7 +1849,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                 },
               ),
               const SizedBox(height: 8),
-              const Text('Updates: periodic polling is used for web builds.', style: TextStyle(fontSize: 12)),
+              const Text('Updates: socket-driven updates are used for this build.', style: TextStyle(fontSize: 12)),
             ]),
             actions: [
               TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel')),
@@ -1533,8 +1911,9 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   // 12) Logout handling
   // -----------------------
   Future<void> _logout() async {
+    // Socket-only build: attempt to emit a logout event, then clear local state.
     try {
-      await http.get(Uri.parse(_logoutEndpoint), headers: {'Accept': 'application/json'}).timeout(const Duration(seconds: 6));
+      _socket?.emit('logout', {});
     } catch (_) {}
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('loggedIn', false);
@@ -1717,62 +2096,38 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     return '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}:${dt.second.toString().padLeft(2, '0')}';
   }
 
+  // -----------------------
+  // Evaluate and persist changes
+  // -----------------------
   Future<void> _evaluateAndPersistChanges() async {
     try {
-      final snapshot = <String, dynamic>{};
-      for (var s in sources) {
-        snapshot[s['name']] = {
-          'connectionKey': s['connectionKey'],
-          'reportKey': s['reportKey'],
-          'reportValue': s['reportValue'],
-        };
-      }
+      // Build a lightweight snapshot keyed by source name
+      final Map<String, dynamic> snapshot = {
+        for (var s in sources)
+          s['name']: {
+            'connectionKey': s['connectionKey'],
+            'reportKey': s['reportKey'],
+            'reportValue': s['reportValue'],
+          }
+      };
 
+      // Append a daily log entry for visibility
       _dailyLog.add({
         'time': DateTime.now().toIso8601String(),
         'description': 'Updated ${sources.length} sources',
         'status': 'UPDATE',
       });
 
-      await _saveOldSnapshot(snapshot);
-      await _savePersistedLogs();
-    } catch (_) {}
-  }
-
-  Map<String, dynamic> _mapProbeToKeysAndValue(
-      String sourceName, Map<String, dynamic>? probeBody, String probeStatus) {
-    final connKey = probeStatus;
-    String repKey = probeStatus;
-    double? reportValue;
-    try {
-      if (sourceName.contains('Source C')) {
-        if (probeBody != null &&
-            probeBody['current_weather'] != null &&
-            probeBody['current_weather']['temperature'] != null) {
-          repKey = 'ok';
-          final tmp = probeBody['current_weather']['temperature'];
-          if (tmp is num) reportValue = tmp.toDouble();
-        } else {
-          repKey = 'warning';
-        }
-      } else if (sourceName.contains('Source D')) {
-        if (probeBody != null && probeBody['features'] is List && (probeBody['features'] as List).isNotEmpty) {
-          final f = (probeBody['features'] as List).first;
-          if (f is Map && f['properties'] is Map && f['properties']['mag'] != null) {
-            repKey = 'ok';
-            final m = f['properties']['mag'];
-            if (m is num) reportValue = m.toDouble();
-          } else {
-            repKey = 'warning';
-          }
-        } else {
-          repKey = 'warning';
-        }
+      // If snapshot changed, persist it and the logs
+      final String prevJson = jsonEncode(oldSnapshot ?? {});
+      final String currentJson = jsonEncode(snapshot);
+      if (prevJson != currentJson) {
+        await _saveOldSnapshot(snapshot);
       }
+      await _savePersistedLogs();
     } catch (_) {
-      repKey = 'error';
+      // swallow errors to avoid UI disruption
     }
-    return {'connection': connKey, 'report': repKey, 'value': reportValue};
   }
 }
 
@@ -1890,3 +2245,4 @@ class LogPage extends StatelessWidget {
     );
   }
 }
+
