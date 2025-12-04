@@ -96,6 +96,10 @@ locations_schema = {
                 },
                 "lon": {
                     "bsonType": "double"
+                },
+                "zip_code": {
+                    "bsonType": "string"
+                }
                 }
             }
         }
