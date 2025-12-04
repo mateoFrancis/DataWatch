@@ -45,7 +45,8 @@ class MyApp extends StatelessWidget {
         future: _checkLoggedIn(),
         builder: (context, snapshot) {
           if (snapshot.connectionState != ConnectionState.done) {
-            return const Scaffold(body: Center(child: CircularProgressIndicator()));
+            return const Scaffold(
+                body: Center(child: CircularProgressIndicator()));
           }
           final loggedIn = snapshot.data ?? false;
           return loggedIn ? const HomePage() : const LoginPage();
@@ -73,9 +74,9 @@ class _LoginPageState extends State<LoginPage> {
 
   // UI state flags
   bool _showAboutInline = false; // toggles the inline About content
-  bool _isLoading = false;       // shows progress indicator on actions
-  String? _errorMessage;         // displays errors above the form
-  bool _isRegisterMode = false;  // toggles between Login and Create Account
+  bool _isLoading = false; // shows progress indicator on actions
+  String? _errorMessage; // displays errors above the form
+  bool _isRegisterMode = false; // toggles between Login and Create Account
 
   @override
   void dispose() {
@@ -88,10 +89,12 @@ class _LoginPageState extends State<LoginPage> {
   // 3.2) Server calls (login/register)
   // Configure endpoints for test vs production
   static const bool _isTestMode = false; // set false for production builds
-  String get _loginEndpoint =>
-      _isTestMode ? 'http://127.0.0.1:5000/login' : 'https://datawatchapp.com/api/login';
-  String get _registerEndpoint =>
-      _isTestMode ? 'http://127.0.0.1:5000/register' : 'https://datawatchapp.com/api/register';
+  String get _loginEndpoint => _isTestMode
+      ? 'http://127.0.0.1:5000/login'
+      : 'https://datawatchapp.com/api/login';
+  String get _registerEndpoint => _isTestMode
+      ? 'http://127.0.0.1:5000/register'
+      : 'https://datawatchapp.com/api/register';
 
   // Try to authenticate with Flask server
   Future<Map<String, dynamic>> _authenticateWithServer(
@@ -190,7 +193,8 @@ class _LoginPageState extends State<LoginPage> {
       await prefs.setBool('loggedIn', true);
       await prefs.setString('username', 'local'); // mark as local session
       if (!mounted) return;
-      Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const HomePage()));
+      Navigator.pushReplacement(
+          context, MaterialPageRoute(builder: (_) => const HomePage()));
       return;
     }
 
@@ -203,11 +207,13 @@ class _LoginPageState extends State<LoginPage> {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('loggedIn', true);
       await prefs.setString('username', result['username']);
-      Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const HomePage()));
+      Navigator.pushReplacement(
+          context, MaterialPageRoute(builder: (_) => const HomePage()));
     } else if (result['success'] == null) {
       // Server unreachable
       setState(() {
-        _errorMessage = 'Server unreachable. Account login requires server; use blank username/password to log in locally.';
+        _errorMessage =
+            'Server unreachable. Account login requires server; use blank username/password to log in locally.';
         _isLoading = false;
       });
     } else {
@@ -256,7 +262,8 @@ class _LoginPageState extends State<LoginPage> {
 
     if (result['success'] == true) {
       // Inform user and return to login mode
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(result['message'])));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(result['message'])));
       setState(() {
         _isRegisterMode = false;
         _isLoading = false;
@@ -264,7 +271,8 @@ class _LoginPageState extends State<LoginPage> {
     } else if (result['success'] == null) {
       // Server unreachable: account creation disabled
       setState(() {
-        _errorMessage = 'Account creation is unavailable at the moment (server unreachable). Please try again later.';
+        _errorMessage =
+            'Account creation is unavailable at the moment (server unreachable). Please try again later.';
         _isLoading = false;
       });
     } else {
@@ -289,7 +297,8 @@ class _LoginPageState extends State<LoginPage> {
                 // Logo above Welcome, tappable to AboutPage
                 GestureDetector(
                   onTap: () {
-                    Navigator.push(context, MaterialPageRoute(builder: (_) => const AboutPage()));
+                    Navigator.push(context,
+                        MaterialPageRoute(builder: (_) => const AboutPage()));
                   },
                   child: Image.asset(
                     'assets/main_logo.png',
@@ -302,11 +311,14 @@ class _LoginPageState extends State<LoginPage> {
                 // Title + subtitle depending on mode
                 Text(
                   _isRegisterMode ? 'Create Account' : 'Welcome',
-                  style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold),
+                  style: const TextStyle(
+                      fontSize: 26, fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  _isRegisterMode ? 'Fill in details to register' : 'Sign In to continue',
+                  _isRegisterMode
+                      ? 'Fill in details to register'
+                      : 'Sign In to continue',
                   style: const TextStyle(fontSize: 18),
                 ),
                 const SizedBox(height: 20),
@@ -326,7 +338,8 @@ class _LoginPageState extends State<LoginPage> {
                         Icon(Icons.error_outline, color: Colors.red.shade700),
                         const SizedBox(width: 8),
                         Expanded(
-                          child: Text(_errorMessage!, style: TextStyle(color: Colors.red.shade700)),
+                          child: Text(_errorMessage!,
+                              style: TextStyle(color: Colors.red.shade700)),
                         ),
                       ],
                     ),
@@ -335,14 +348,16 @@ class _LoginPageState extends State<LoginPage> {
                 // Username
                 TextField(
                   controller: _usernameController,
-                  decoration: const InputDecoration(labelText: 'Username', border: OutlineInputBorder()),
+                  decoration: const InputDecoration(
+                      labelText: 'Username', border: OutlineInputBorder()),
                 ),
                 const SizedBox(height: 12),
 
                 // Password
                 TextField(
                   controller: _passwordController,
-                  decoration: const InputDecoration(labelText: 'Password', border: OutlineInputBorder()),
+                  decoration: const InputDecoration(
+                      labelText: 'Password', border: OutlineInputBorder()),
                   obscureText: true,
                 ),
                 const SizedBox(height: 12),
@@ -351,7 +366,9 @@ class _LoginPageState extends State<LoginPage> {
                 if (_isRegisterMode)
                   TextField(
                     controller: _confirmController,
-                    decoration: const InputDecoration(labelText: 'Confirm Password', border: OutlineInputBorder()),
+                    decoration: const InputDecoration(
+                        labelText: 'Confirm Password',
+                        border: OutlineInputBorder()),
                     obscureText: true,
                   ),
 
@@ -373,7 +390,8 @@ class _LoginPageState extends State<LoginPage> {
                             width: 20,
                             child: CircularProgressIndicator(
                               strokeWidth: 2,
-                              valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                              valueColor:
+                                  AlwaysStoppedAnimation<Color>(Colors.white),
                             ),
                           )
                         : Text(_isRegisterMode ? 'Create Account' : 'Login'),
@@ -391,7 +409,8 @@ class _LoginPageState extends State<LoginPage> {
                             _errorMessage = null; // clear error on toggle
                           });
                         },
-                  child: Text(_isRegisterMode ? 'Back to Login' : 'Create Account'),
+                  child: Text(
+                      _isRegisterMode ? 'Back to Login' : 'Create Account'),
                 ),
                 const SizedBox(height: 12),
 
@@ -407,7 +426,9 @@ class _LoginPageState extends State<LoginPage> {
                 AnimatedCrossFade(
                   firstChild: const SizedBox.shrink(),
                   secondChild: const AboutInline(),
-                  crossFadeState: _showAboutInline ? CrossFadeState.showSecond : CrossFadeState.showFirst,
+                  crossFadeState: _showAboutInline
+                      ? CrossFadeState.showSecond
+                      : CrossFadeState.showFirst,
                   duration: const Duration(milliseconds: 250),
                 ),
               ],
@@ -430,7 +451,8 @@ class AboutInline extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('About DataWatch', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+          Text('About DataWatch',
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
           SizedBox(height: 10),
           Text(
             'DataWatch is a monitoring platform that tracks and visualizes data source connectivity and reporting performance in real time. '
@@ -438,11 +460,10 @@ class AboutInline extends StatelessWidget {
             style: TextStyle(fontSize: 16, height: 1.4),
           ),
           SizedBox(height: 10),
-          Text('Version 1.0.0 — Developed 2025', style: TextStyle(color: Colors.grey, fontSize: 14)),
+          Text('Version 1.0.0 — Developed 2025',
+              style: TextStyle(color: Colors.grey, fontSize: 14)),
         ],
       ),
     );
   }
 }
-
-
