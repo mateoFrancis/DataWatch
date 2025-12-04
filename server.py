@@ -92,7 +92,7 @@ def c1_loop():
         print(f"[C1] DB={db_status}, API={api_status}, SOCKET={socket_status}")
 
         # wait 60 seconds
-        socketio.sleep(60)
+        socketio.sleep(30)
 
 
 def c2_loop():
@@ -106,7 +106,7 @@ def c2_loop():
         except Exception as e:
             print("[C2_LOOP] Error:", e)
         
-        socketio.sleep(180)  # wait 60 seconds before next run
+        socketio.sleep(30)  # wait 60 seconds before next run
 
 
 def c3_loop():
@@ -120,7 +120,7 @@ def c3_loop():
         except Exception as e:
             print("[C3_LOOP] Error:", e)
         
-        socketio.sleep(185)  # wait 60 seconds before next run
+        socketio.sleep(35)  # wait 60 seconds before next run
 
 
 
