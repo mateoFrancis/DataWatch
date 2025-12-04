@@ -9,14 +9,14 @@ sys.path.append("/srv/shared/DataWatch")
 import tools
 
 system_user_id = 1
-
+"""
 try:
     from app import socketio
 except:
     socketio = None
+"""
 
-
-def run_weather_sync_job():
+def run_weather_sync_job(socketio):
 
     try:
 

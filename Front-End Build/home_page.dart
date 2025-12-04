@@ -355,7 +355,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   // Setup socket listeners (adds listeners for c1, c2, c3)
   void _setupSocketListeners() {
     try {
-      final base = _isTestMode ? 'http://127.0.0.1:5000' : 'https://datawatchapp.com';
+      final base = /*_isTestMode ? 'http://127.0.0.1:5000' : */'https://datawatchapp.com';
       // Use websocket transport for web compatibility
       _socket = IO.io(base, <String, dynamic>{
         'transports': ['websocket'],

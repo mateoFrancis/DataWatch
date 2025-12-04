@@ -381,6 +381,3 @@ def get_recent_weather_data(api_call_id):
         conn.close()
 
     return weather_rows
-
-
-if __name__ == "__main__":
