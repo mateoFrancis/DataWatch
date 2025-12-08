@@ -371,6 +371,7 @@ except Exception:
     })
 
 db.users.create_index("user_id", unique=True)
+db.users.create_index("email", unique=True)
 
 try:
     db.create_collection("weather_error_logs", validator=weather_error_schema["validator"])
