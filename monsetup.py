@@ -14,8 +14,7 @@ try:
     montools.add_data_source(
         name = "USGSEarthquake",
         type_ = "Earthquake",
-        base_url = "https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&minmagnitude=1&mindepth=10&starttime=2020-01-01&endtime=2025-12-31",
-    )
+        base_url = "https://earthquake.usgs.gov/fdsnws/event/1/query)
 except Exception as e:
     print(f"[setup] Data source already exists or error: {e}")
 
