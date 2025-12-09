@@ -109,7 +109,7 @@ data_sources_schema = {
     "validator": {
         "$jsonSchema": {
             "bsonType": "object",
-            "required": ["source_id", "name", "type", "base_url", "created_datetime"],
+            "required": ["source_id", "name", "type", "base_url", "created_at"],
             "properties": {
                 "source_id": {
                     "bsonType": "int"
