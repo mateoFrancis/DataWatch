@@ -799,9 +799,22 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       }
       final c2 = {'status': _normalizeStatus(c2StatusRaw)};
 
+      // if missing, fall back to server 'status'
+      final String c3StatusFromServer = _normalizeStatus(c3Json?['status']);
+      final String c3DataField = _normalizeStatus(c3Json?['data']);
+      final String c3VarianceField = _normalizeStatus(c3Json?['variance']);
+
       final c3 = {
-        'data': _normalizeStatus(c3Json?['data']),
-        'variance': _normalizeStatus(c3Json?['variance']),
+        'data': (c3Json != null && c3Json.containsKey('data') && c3Json['data'] != null)
+            ? c3DataField
+            : (c3Json != null && c3Json.containsKey('status') && c3StatusFromServer != '')
+                ? c3StatusFromServer
+                : 'down',
+        'variance': (c3Json != null && c3Json.containsKey('variance') && c3Json['variance'] != null)
+            ? c3VarianceField
+            : (c3Json != null && c3Json.containsKey('status') && c3StatusFromServer != '')
+                ? c3StatusFromServer
+                : 'down',
       };
 
       // Build R1 and R2 from socket-derived C1/C2/C3
@@ -896,9 +909,22 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       }
       final c2 = {'status': _normalizeStatus(c2StatusRaw)};
 
+      // if missing, fall back to server 'status'
+      final String c3StatusFromServer = _normalizeStatus(c3Json?['status']);
+      final String c3DataField = _normalizeStatus(c3Json?['data']);
+      final String c3VarianceField = _normalizeStatus(c3Json?['variance']);
+
       final c3 = {
-        'data': _normalizeStatus(c3Json?['data']),
-        'variance': _normalizeStatus(c3Json?['variance']),
+        'data': (c3Json != null && c3Json.containsKey('data') && c3Json['data'] != null)
+            ? c3DataField
+            : (c3Json != null && c3Json.containsKey('status') && c3StatusFromServer != '')
+                ? c3StatusFromServer
+                : 'down',
+        'variance': (c3Json != null && c3Json.containsKey('variance') && c3Json['variance'] != null)
+            ? c3VarianceField
+            : (c3Json != null && c3Json.containsKey('status') && c3StatusFromServer != '')
+                ? c3StatusFromServer
+                : 'down',
       };
 
       final r1 = _formatR1FromC1(name, c1Json);
@@ -1276,7 +1302,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
   Color _colorForKey(String k) {
     final palette = _paletteForMode(_colorMode);
-    final hex = palette[k] ?? palette['ok']!;
+    final hex = palette[k.toLowerCase()] ?? '#9e9e9e';
     return Color(int.parse(hex.replaceFirst('#', '0xff')));
   }
 
@@ -1330,10 +1356,29 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       c3['data'] ?? 'down',
       c3['variance'] ?? 'down',
     };
-    if ((c3['data'] == 'stale') || (c3['variance'] == 'stale')) return 'stale';
-    if (statuses.length == 1) return statuses.first;
+
+    // If all are ok → ok
+    if (statuses.every((s) => s == 'ok')) return 'ok';
+
+    // If all are down → down
+    if (statuses.every((s) => s == 'down')) return 'down';
+
+    // If all are error → error
+    if (statuses.every((s) => s == 'error')) return 'error';
+
+    // If only stale values present → stale
+    if (statuses.every((s) => s == 'stale')) return 'stale';
+
+    // If stale is mixed with down/error → warning
+    if (statuses.contains('stale') &&
+        (statuses.contains('down') || statuses.contains('error'))) {
+      return 'warning';
+    }
+
+    // Otherwise, any mixed statuses → warning
     return 'warning';
   }
+
 
   String _mirrorFromC1(Map<String, String> c1) {
     final set = {c1['database'], c1['api'], c1['socket']};
@@ -1818,11 +1863,19 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                                       Padding(
                                         padding:
                                             const EdgeInsets.only(bottom: 6.0),
-                                        child: _buildThreeBarsForButton(
-                                          c1['database'] ?? connKey,
-                                          c1['api'] ?? connKey,
-                                          c1['socket'] ?? connKey,
-                                        ),
+                                        child: Builder(builder:(context) {
+                                          final String c1StatusForBar = 
+                                            (_mirrorFromC1(c1) as String?) ?? (c1['database'] ?? connKey);
+
+                                          final String c2StatusForBar = (c2['status'] ?? connKey);
+                                          final String c3StatusForBar = (c3['data'] ?? connKey);
+
+                                          return _buildThreeBarsForButton(
+                                            c1StatusForBar, 
+                                            c2StatusForBar, 
+                                            c3StatusForBar,
+                                          );
+                                        }),
                                       ),
                                       const SizedBox(height: 6),
                                       ElevatedButton(
