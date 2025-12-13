@@ -307,22 +307,19 @@ def update_api_call_status(call_id, status):
     return affected
 
 def get_data_source_by_name(name):
-   
     conn = get_connection()
     source = None
 
     try:
-
         cur = conn.cursor(dictionary=True)
-        cur.execute("select * from data_sources where name = ?", (name,))
+        cur.execute("SELECT * FROM data_sources WHERE name = %s", (name,))
         source = cur.fetchone()
-
     finally:
-
         cur.close()
         conn.close()
 
     return source
+
 
 def get_all_locations():
 

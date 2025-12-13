@@ -1,13 +1,11 @@
 SET foreign_key_checks = 0;
 
-source DataWatchDB.sql;
+source DB/DataWatchDB.sql;
+source DB/procedures.sql;
 
-source procedures.sql;
+SHOW PROCEDURE STATUS WHERE Db = 'datawatch';
+SHOW TABLES;
 
-Show procedure status where Db = 'datawatch';
-
-Show tables;
-
-\! python3 /srv/shared/DataWatch/setup.py
+\! python3 setup.py
 
 SET foreign_key_checks = 1;

@@ -1,164 +1,131 @@
-
+# APIS/openWeather.py
 
 import requests
 from datetime import datetime
-import pytz
+import tools  # uses your existing tools.py
 
-import sys
-sys.path.append("/srv/shared/DataWatch")
-import tools
+USER_ID = 1  # "system" user created in setup.py
 
-system_user_id = 1
 
-try:
-    from app import socketio
-except:
-    socketio = None
+def fetch_openweather_for_location(loc, source):
+    """
+    Call OpenWeather for a single location.
+
+    loc:  dict from tools.get_all_locations():
+          {location_id, city, country, lat, lon, zip_code}
+    source: dict from tools.get_data_source_by_name("OpenWeather"):
+            {source_id, name, type, base_url, api_key, ...}
+    """
+    base_url = source["base_url"]
+    api_key = source["api_key"]
+    zip_code = loc.get("zip_code")
+    country = loc.get("country") or "US"
+
+    # Choose zip if available, else lat/lon
+    if zip_code:
+        params = {
+            "zip": f"{zip_code},{country}",
+            "appid": api_key,
+            "units": "imperial",
+        }
+    else:
+        params = {
+            "lat": loc["lat"],
+            "lon": loc["lon"],
+            "appid": api_key,
+            "units": "imperial",
+        }
+
+    resp = requests.get(base_url, params=params, timeout=10)
+    resp.raise_for_status()
+    return resp.json()
 
 
 def run_weather_sync_job():
+    """
+    Scheduled by server.py every minute.
 
-    try:
+    Steps:
+      - get OpenWeather data source
+      - get all locations
+      - for each location:
+          * log_api_call
+          * call OpenWeather
+          * insert into weather_data using location_id
+          * on error, log_weather_error
+    """
+    print("\n[openWeather] Starting weather sync job...")
 
-        # get source data
-        source = tools.get_data_source_by_name("OpenWeather")
-        base_url = source["base_url"]
-        api_key = source["api_key"]
-        source_id = source["source_id"]
+    # 1. Find the OpenWeather source row
+    source = tools.get_data_source_by_name("OpenWeather")
+    if not source:
+        print("[openWeather] ERROR: data_sources entry 'OpenWeather' not found.")
+        return "OpenWeather source missing"
 
-        # api call started
-        api_call_id = tools.log_api_call(
-            source_id = source_id,
-            user_id = system_user_id,
-            call_type = "weather",
-            status = "STARTED"
-        )
+    source_id = source["source_id"]
 
-        # get all locations (zip codes)
-        locations = tools.get_all_locations()
+    # 2. Get all locations
+    locations = tools.get_all_locations()
+    if not locations:
+        print("[openWeather] No locations found in 'locations' table.")
+        return "No locations found"
 
-        pst = pytz.timezone("America/Los_Angeles")
-        
-        success_count = 0
-        failure_count = 0
+    for loc in locations:
+        loc_id = loc["location_id"]
+        city = loc["city"]
 
-        for loc in locations:
+        call_id = None
+        try:
+            # 3. Log the API call as 'pending'
+            call_id = tools.log_api_call(
+                source_id=source_id,
+                user_id=USER_ID,
+                call_type="weather",
+                status="pending",
+            )
 
-            location_id = loc["location_id"]
-            zip_code = loc["zip_code"]
+            # 4. Fetch from OpenWeather
+            data = fetch_openweather_for_location(loc, source)
 
-            params = {
-                "zip": f"{zip_code},US",
-                "appid": api_key,
-                "units": "imperial"
-            }
+            main = data.get("main", {})
+            wind = data.get("wind", {})
 
+            temperature = float(main.get("temp")) if main.get("temp") is not None else None
+            humidity = float(main.get("humidity")) if main.get("humidity") is not None else None
+            wind_speed = float(wind.get("speed")) if wind.get("speed") is not None else None
+
+            # Use API time if provided, else let DB default NOW()
+            dt = data.get("dt")  # epoch seconds
+            recorded_at = datetime.utcfromtimestamp(dt) if dt else None
+
+            # 5. Insert into weather_data via stored procedure
+            weather_id = tools.insert_weather_data(
+                source_id=source_id,
+                location_id=loc_id,
+                user_id=USER_ID,
+                temperature=temperature,
+                humidity=humidity,
+                wind_speed=wind_speed,
+                recorded_at=recorded_at,
+                call_id=call_id,
+            )
+
+            print(f"[openWeather] Stored weather_id={weather_id} for {city}")
+
+        except Exception as e:
+            print(f"[openWeather] ERROR for {city}: {e}")
             try:
-                response = requests.get(base_url, params=params, timeout=10)
-                response.raise_for_status()
-                data = response.json()
-
-                temp = data.get("main", {}).get("temp")
-                humidity = data.get("main", {}).get("humidity")
-                wind_speed = data.get("wind", {}).get("speed")
-
-                # convert timestamp
-                dt_utc = datetime.utcfromtimestamp(data["dt"])
-                dt_pst = dt_utc.replace(tzinfo=pytz.utc).astimezone(pst)
-                recorded_at = dt_pst.strftime("%Y-%m-%d %H:%M:%S")
-
-                # insert weather data
-                tools.insert_weather_data(
-                    source_id,
-                    location_id,
-                    system_user_id,
-                    temp,
-                    humidity,
-                    wind_speed,
-                    recorded_at,
-                    api_call_id
-                )
-
-                success_count += 1
-
-            except Exception as e:
-
-                failure_count += 1
-
+                # 6. Log error
                 tools.log_weather_error(
-                    call_id = api_call_id,
-                    error_type = "WeatherFetchError",
-                    error_message = f"Location {location_id}: {str(e)}"
+                    call_id=call_id,
+                    error_type="OpenWeatherError",
+                    error_message=str(e),
                 )
+            except Exception as e2:
+                print(f"[openWeather] Failed to log weather error: {e2}")
+
+    return "Weather sync completed"
 
 
-        # determine final status
-        final_status = "SUCCESS" if failure_count == 0 else (
-            "FAILED" if success_count == 0 else "PARTIAL"
-        )
-
-        tools.update_api_call_status(
-            call_id = api_call_id,
-            status = final_status
-        )
-
-        # c2 emmit start
-        total_locations = len(locations)
-
-        # mongoDB transfer funciton call (work in progress...)
-        # recent_data = tools.get_recent_weather_data(api_call_id)
-        # mongo_transfer_status = transfer_to_mongo(recent_data)
-
-        mongo_transfer_status = False  # placeholder for now
-
-        c2_data = {
-            "source": "weather",
-            "read": 2 + total_locations,     # db reads + api fetches
-            "create": success_count,         # inserts into weather table
-            "update": 1,                     # update_api_call_status
-            "delete": 0,                     # no deletes yet
-            "success": success_count,
-            "failed": failure_count,
-            "mongo_transfer_status": mongo_transfer_status
-        }
-
-        if socketio:
-            socketio.emit("c2", c2_data)
-
-        #print(f"[C2] {c2_data}")
-        
-
-        return "\nWeather sync completed"
-
-    except Exception as fatal_error:
-
-        # fatal failure
-        tools.update_api_call_status(
-            call_id = api_call_id,
-            status = "FAILED"
-        )
-
-        # C2 emit on fatal failure
-        c2_data = {
-            "source": "weather",
-            "read": 0,
-            "create": 0,
-            "update": 0,
-            "delete": 0,
-            "success": 0,
-            "failed": len(tools.get_all_locations()),  # or total expected operations
-            "mongo_transfer_status": False,
-            "error": str(fatal_error)
-        }
-
-        if socketio:
-            socketio.emit("c2", c2_data)
-
-        #print(f"[C2 - FATAL] {c2_data}")
-
-        return "Weather sync failed"
-        
-
-
-# if __name__ == "__main__":
-#     print(run_weather_sync_job())
+if __name__ == "__main__":
+    print(run_weather_sync_job())
